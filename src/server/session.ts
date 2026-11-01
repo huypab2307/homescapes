@@ -51,14 +51,8 @@ export interface OverviewPayload {
   storage: Array<{ key: string; leaves: number }>;
 }
 
-export class SessionError extends Error {
-  readonly status: number;
-  constructor(message: string, status = 400) {
-    super(message);
-    this.name = "SessionError";
-    this.status = status;
-  }
-}
+import { SessionError } from "./errors.ts";
+export { SessionError } from "./errors.ts";
 
 export class SaveSession {
   readonly id: string;

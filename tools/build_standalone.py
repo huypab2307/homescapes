@@ -35,11 +35,11 @@ def main():
     if STAGE.exists():
         shutil.rmtree(STAGE)
     STAGE.mkdir(parents=True)
-    for folder in ('src', 'dist', 'data'):
-        source = ROOT / folder
-        if not source.is_dir():
-            raise RuntimeError(f'Missing project folder: {source}')
-        shutil.copytree(source, STAGE / folder, ignore=shutil.ignore_patterns('*.test.ts', '__pycache__'))
+    # Whitelist gateway modules: never package save engine, data or admin authority.
+    (STAGE / 'src' / 'server').mkdir(parents=True)
+    for name in ('gateway.ts', 'remote.ts', 'errors.ts'):
+        shutil.copy2(ROOT / 'src' / 'server' / name, STAGE / 'src' / 'server' / name)
+    shutil.copytree(ROOT / 'dist', STAGE / 'dist')
     (STAGE / 'runtime').mkdir()
     shutil.copy2(node, STAGE / 'runtime' / 'node.exe')
     (STAGE / 'package.json').write_text('{"type":"module"}', encoding='utf-8')
@@ -70,7 +70,7 @@ def main():
     args = [*pyinstaller, '--onefile', '--windowed', '--collect-all', 'webview',
             '--name', 'HomescapesSaveStudio', '--distpath', OUT,
             '--workpath', STAGE / 'app-work', '--specpath', STAGE]
-    for folder in ('src', 'dist', 'data', 'runtime', 'bridge'):
+    for folder in ('src', 'dist', 'runtime', 'bridge'):
         args.extend(['--add-data', f'{STAGE / folder};{folder}'])
     args.extend(['--add-data', f'{STAGE / "package.json"};.', ROOT / 'client' / 'desktop_launcher.py'])
     run(*args)

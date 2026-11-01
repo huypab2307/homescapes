@@ -1,47 +1,18 @@
-# Render + EXE
+# Homescapes Save Studio — Render License Edition
 
-Bản này hỗ trợ Render xử lý save, EXE giữ ADB/UI. Xem DEPLOY_RENDER.md. File render.yaml đã sẵn sàng cho Blueprint; cần triển khai và nhập URL/API key vào nút Server trên EXE.
+Web Service xử lý save, license key khóa một máy, Admin tạo/thu hồi/gỡ khóa,
+Windows client có màn hình đăng nhập và toàn bộ các tab cũ cùng MAX_GP.
 
-# Homescapes VIP Studio
+**Bắt đầu:** đọc [DEPLOY_RENDER.md](DEPLOY_RENDER.md), deploy lại Web Service,
+thiết lập PostgreSQL + mật khẩu Admin + secret ký token, rồi tạo key tại `/admin`.
+Build client trên Windows bằng `BUILD_EXE.bat`.
 
-Professional Homescapes save-editing tool — server-side save algorithms with a Windows
-client shell (WebView2 + ADB). Modeled on the IGG VIP Studio architecture: the server
-owns every save transformation (byte-exact, surgical edits) and the client only drives
-the device and hosts the UI.
+- `npm start`: server xử lý save (Render đặt `HC_CLOUD_MODE=1`).
+- `npm run client`: gateway desktop nhẹ; cần engine Render đã deploy.
+- `npm run build`: kiểm tra TypeScript và build UI.
+- `npm test`: các kiểm tra engine/session/API.
+- `node --experimental-strip-types tools/verify_render.mjs PATH_TO_SAVE`:
+  kiểm tra tích hợp license và gateway với ADB giả trên Linux.
 
-## Features
-
-- **Device bridge** — ADB pull / push with root (`su`), force-stop, `SaveGame.db.hcsbak`
-  snapshot backup, one-click restore, optional relaunch.
-- **Save codec** — repeating-XOR (period 731) decode/encode with automatic per-install
-  statistical key recovery; integrity strings refreshed only where proven derived.
-- **Data Center** — coins, stars, lives, chapter & quest progress at a glance.
-- **Boosters** — edit the match-3 booster inventory.
-- **Cosmetics** — frames, styles, badges, titles, avatars: grant + equip with
-  merge-safe operations (server unions grants, never clobbers ownership).
-- **Quests / Rooms / Collections** — quest completion state, renovation repairs,
-  character & album collections.
-- **Review & apply** — every staged edit is reviewed, then applied as one byte-exact
-  patch with `assertUntouched` guarantees.
-
-## Develop
-
-```bash
-npm install
-npm run dev        # Vite dev server
-npm run server     # production server (serves ./dist) on :8787
-npm test           # engine test-suite (node --experimental-strip-types --test)
-npm run build      # typecheck + vite build
-```
-
-## Architecture
-
-```
-src/engine/    save codec + op-builder (surgical byte-level edits, zero deps)
-src/server/    node:http server — all game logic lives here
-src/sections/  UI sections (React + Tailwind)
-client/        Windows EXE client — ADB driver + WebView2 shell around the web UI
-```
-
-All game logic is server-side. The UI stages intent; the server builds merge-safe
-operations and returns the exact op list applied.
+Các bản client cũ dùng API key chung không tương thích với server license.
+Không chép API key cũ vào bản mới. Không lưu database/secret vào repository.

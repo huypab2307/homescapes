@@ -30,7 +30,7 @@ def main():
     try:
         import webview
         node = root / 'runtime' / 'node.exe'
-        server = root / 'src' / 'server' / 'main.ts'
+        server = root / 'src' / 'server' / 'gateway.ts'
         bridge = root / 'bridge' / 'hc_bridge.exe'
         for path in (node, server, bridge, root / 'dist' / 'index.html'):
             if not path.is_file():
@@ -43,6 +43,14 @@ def main():
         env.pop('HC_CLOUD_MODE', None)
         env.update(HC_PORT=str(port), HC_BRIDGE_EXE=str(bridge), PYTHONUTF8='1',
                    HC_CONFIG_PATH=str(log_dir.parent / 'server-settings.json'))
+        # Stable machine binding; the raw Windows MachineGuid never leaves this PC.
+        import hashlib
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Microsoft\Cryptography', 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as registry:
+            machine_guid = str(winreg.QueryValueEx(registry, 'MachineGuid')[0])
+        env['HC_DEVICE_ID'] = hashlib.sha256(('HomescapesStudio:' + machine_guid).encode()).hexdigest()
+        env['HC_REMOTE_URL'] = 'https://homescapes-save-api.onrender.com'
+        env.pop('HC_REMOTE_KEY', None)
         with log_path.open('w', encoding='utf-8') as log:
             process = subprocess.Popen(
                 [str(node), '--experimental-strip-types', str(server)],

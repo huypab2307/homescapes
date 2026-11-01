@@ -11,5 +11,9 @@ services:
         value: 24.21.0
       - key: HC_CLOUD_MODE
         value: "1"
-      - key: HC_API_KEY
+      - key: HC_SESSION_SECRET
         generateValue: true
+      - key: HC_ADMIN_PASSWORD
+        sync: false
+      - key: DATABASE_URL
+        sync: false

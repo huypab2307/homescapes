@@ -1,23 +1,33 @@
 /** Desktop gateway: ADB/UI stay local; save processing is forwarded over HTTPS. */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
-import { readFile, writeFile, mkdir, mkdtemp, rm } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { writeFile, mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { SessionError } from "./session.ts";
+import { SessionError } from "./errors.ts";
 
 interface Config { url: string; apiKey: string; clientId: string }
-const configPath = process.env.HC_CONFIG_PATH;
-let config: Config = { url: process.env.HC_REMOTE_URL ?? "", apiKey: process.env.HC_REMOTE_KEY ?? "", clientId: randomUUID() };
-let initialized: Promise<void> | undefined;
+let config: Config = { url: process.env.HC_REMOTE_URL ?? "https://homescapes-save-api.onrender.com", apiKey: "", clientId: process.env.HC_DEVICE_ID ?? randomUUID() };
+let licenseKey = "";
+let tokenUntil = 0;
+let expiresAt = 0;
+let refreshPending: Promise<void> | undefined;
 const provenance = new Map<string, { serial: string; package: string; file: string }>();
-const initialize = () => initialized ??= (async () => {
-  if (!configPath) return;
-  try {
-    const saved = JSON.parse(await readFile(configPath, "utf8"));
-    config = { url: String(saved.url ?? config.url), apiKey: String(saved.apiKey ?? config.apiKey), clientId: String(saved.clientId ?? config.clientId) };
-  } catch (err) { if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw new SessionError("Cannot read desktop server settings", 500); }
-})();
+const initialize = async () => {};
+async function activate(key: string) {
+  const response = await fetch(endpoint(config.url) + '/api/auth/login', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ key, deviceId: config.clientId }), redirect: 'error', signal: AbortSignal.timeout(120000),
+  });
+  const data = await response.json() as any;
+  if (!response.ok) throw new SessionError(data.error ?? 'Login failed', response.status);
+  config.apiKey = data.accessToken; tokenUntil = Date.now() + data.tokenSeconds * 1000; expiresAt = data.expiresAt;
+}
+async function ensureToken() {
+  if (!licenseKey) throw new SessionError('Please log in with your license key', 401);
+  if (Date.now() < tokenUntil - 60000) return;
+  await (refreshPending ??= activate(licenseKey).catch(error => { config.apiKey = ''; licenseKey = ''; throw error; }).finally(() => { refreshPending = undefined; }));
+}
 async function body(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = []; let size = 0;
   for await (const chunk of req) { const b = Buffer.from(chunk); size += b.length;
@@ -34,13 +44,14 @@ function endpoint(value: string): string {
   return url.origin;
 }
 async function remote(path: string, method = "GET", data?: Buffer | object, settings = config): Promise<Response> {
-  if (!settings.url || !settings.apiKey) throw new SessionError("Configure the Render URL and API key first", 400);
+  await ensureToken();
   try {
     const response = await fetch(endpoint(settings.url) + path, {
       method, headers: { authorization: `Bearer ${settings.apiKey}`, "x-hc-client": settings.clientId, "content-type": "application/json" },
       body: data === undefined ? undefined : Buffer.isBuffer(data) ? new Uint8Array(data) : JSON.stringify(data),
       signal: AbortSignal.timeout(120_000), redirect: "error",
     });
+    if (response.status === 401) { licenseKey = ''; config.apiKey = ''; provenance.clear(); }
     return response;
   } catch {
     throw new SessionError("Cannot reach Render. Check the URL, connection and server status, then retry. Your game has not been pushed.", 502);
@@ -61,22 +72,25 @@ function send(res: ServerResponse, result: unknown, status = 200) {
 export async function handleRemote(req: IncomingMessage, res: ServerResponse, url: URL,
   bridge: (args: string[]) => Promise<any>): Promise<boolean> {
   await initialize();
-  if (url.pathname === "/api/remote/config") {
-    if (req.method === "POST") {
-      let data: any;
-      try { data = JSON.parse((await body(req)).toString()); } catch { throw new SessionError("Invalid server settings", 400); }
-      const nextUrl = endpoint(String(data.url ?? ""));
-      const nextKey = String(data.apiKey || (nextUrl === config.url ? config.apiKey : ""));
-      const next = { url: nextUrl, apiKey: nextKey, clientId: config.clientId };
-      if (nextUrl) await jsonRemote("/api/sessions", undefined, next); // verify credentials before saving
-      if (configPath) { await mkdir(dirname(configPath), { recursive: true }); await writeFile(configPath, JSON.stringify(next), { mode: 0o600 }); }
-      config = next; provenance.clear();
-    } else if (req.method !== "GET") throw new SessionError("Method not allowed", 405);
-    send(res, { ok: true, url: config.url, hasApiKey: Boolean(config.apiKey), mode: config.url ? "remote" : "local" });
+  if (url.pathname === '/api/local/auth') {
+    if (req.method === 'POST') {
+      const data = JSON.parse((await body(req)).toString());
+      if (data.logout) { licenseKey = ''; config.apiKey = ''; provenance.clear(); }
+      else {
+        if (typeof data.key !== 'string' || data.key.length > 256) throw new SessionError('Invalid license key', 400);
+        await activate(data.key.trim()); licenseKey = data.key.trim(); provenance.clear();
+      }
+    } else if (req.method !== 'GET') throw new SessionError('Method not allowed', 405);
+    send(res, { ok: true, loggedIn: !!licenseKey && !!config.apiKey, deviceId: config.clientId, url: config.url, expiresAt });
     return true;
+  }
+  if (url.pathname === '/api/remote/config') {
+    if (req.method !== 'GET') throw new SessionError('Server URL is configured by the release owner. Use license login.', 403);
+    send(res, { ok: true, url: config.url, hasApiKey: !!licenseKey, mode: 'remote' }); return true;
   }
   if (!config.url || !url.pathname.startsWith("/api/") || url.pathname === "/api/health") return false;
   const path = url.pathname;
+  await ensureToken();
   // Device controls remain on the local bridge, including discovery and backup restore.
   if (["/api/devices", "/api/device/stop", "/api/device/start", "/api/device/restore"].includes(path)) return false;
 
@@ -134,6 +148,7 @@ export async function handleRemote(req: IncomingMessage, res: ServerResponse, ur
   // Stream the protocol response back. Never expose the server API key to JS.
   const response = await remote(url.pathname + url.search, req.method,
     req.method === "GET" ? undefined : await body(req));
+  if (response.status === 401) { licenseKey = ''; config.apiKey = ''; provenance.clear(); }
   res.writeHead(response.status, { "content-type": response.headers.get("content-type") ?? "application/json", "cache-control": "no-store" });
   res.end(Buffer.from(await response.arrayBuffer()));
   return true;

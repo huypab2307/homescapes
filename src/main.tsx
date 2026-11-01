@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { StudioApp } from "./components/StudioApp.tsx";
+import { LicenseApp } from "./components/LicenseApp.tsx";
 import "./styles.css";
 import "./am.css";
 
@@ -9,6 +9,6 @@ if (!container) throw new Error("#root is missing from index.html");
 
 createRoot(container).render(
   <StrictMode>
-    <StudioApp />
+    <LicenseApp />
   </StrictMode>,
 );

@@ -1,7 +1,7 @@
 /**
  * Homescapes Save Studio — local API server.
  *
- * Zero runtime dependencies: `node:http` plus the engine. Runs either as the
+ * Node HTTP server plus the engine and PostgreSQL license authority. Runs as the
  * backend for the Vite dev server or as the single process that also serves
  * the built UI (which is what the desktop shell points WebView2 at).
  *
@@ -33,6 +33,7 @@ import {
   type CosmeticKind,
   type EditOp,
 } from "../engine/index.ts";
+import { handleLicenses, initLicenses } from "./licenses.ts";
 import { CLOUD, cloudScope } from "./cloud.ts";
 import { handleRemote } from "./remote.ts";
 import { dropSession, withSessionScope } from "./session.ts";
@@ -1002,7 +1003,7 @@ const server = createServer((req, res) => {
     if (origin) {
       let localOrigin = false;
       try { localOrigin = ["127.0.0.1", "localhost"].includes(new URL(origin).hostname); } catch {}
-      if (CLOUD || !localOrigin) { sendJson(res, 403, { ok: false, error: "Origin not allowed" }); return; }
+      if ((CLOUD && origin !== `https://${req.headers.host}`) || (!CLOUD && !localOrigin)) { sendJson(res, 403, { ok: false, error: "Origin not allowed" }); return; }
       res.setHeader("access-control-allow-origin", origin);
       res.setHeader("vary", "Origin");
     }
@@ -1012,9 +1013,10 @@ const server = createServer((req, res) => {
 
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${PORT}`);
     try {
+      if (CLOUD && await handleLicenses(req, res, url.pathname)) return;
       if (url.pathname.startsWith("/api/")) {
         if (CLOUD && url.pathname !== "/api/health") {
-          const scope = cloudScope(req, url.pathname);
+          const scope = await cloudScope(req, url.pathname);
           await withSessionScope(scope, () => handleApi(req, res, url));
         } else {
           if (!CLOUD && await handleRemote(req, res, url, callBridge)) return;
@@ -1035,6 +1037,7 @@ const server = createServer((req, res) => {
   })();
 });
 
+if (CLOUD) await initLicenses();
 server.listen(PORT, HOST, () => {
   process.stdout.write(`Homescapes Save Studio listening on http://${HOST}:${PORT}\n`);
 });

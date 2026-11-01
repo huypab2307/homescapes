@@ -288,6 +288,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(`server returned ${res.status} with a non-JSON body`, res.status);
   }
   if (!res.ok || body?.ok === false) {
+    if (res.status === 401 && typeof window !== 'undefined') window.dispatchEvent(new Event('hc-login-required'));
     throw new ApiError(body?.error ?? `request failed (${res.status})`, res.status);
   }
   const returnedId = body?.overview?.meta?.id;

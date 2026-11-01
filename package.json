@@ -14,15 +14,19 @@
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test src/engine/*.test.ts src/lib/api.test.ts src/server/session.test.ts",
     "preview": "vite preview",
-    "start": "node --experimental-strip-types src/server/main.ts"
+    "start": "node --experimental-strip-types src/server/main.ts",
+    "client": "node --experimental-strip-types src/server/gateway.ts",
+    "test:licenses": "node --experimental-strip-types tools/verify_render.mjs"
   },
   "dependencies": {
+    "pg": "^8.23.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.0",
     "@types/node": "^22.16.5",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^5.2.0",
