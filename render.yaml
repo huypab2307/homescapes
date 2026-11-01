@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: homescapes-save-api
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev --cache /tmp/hcs-npm-cache && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 24.21.0
+      - key: HC_CLOUD_MODE
+        value: "1"
+      - key: HC_API_KEY
+        generateValue: true

@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<values>
+	<value name="ShowUserId" type="bool" value="false" />
+	<value name="allow_dev_analytics" type="bool" value="false" />
+	<value name="asana_integration" type="bool" value="false" />
+	<value name="cheat_disable_early_expedition" type="bool" value="false" />
+	<value name="cheat_start_from_cc" type="bool" value="false" />
+	<value name="cheat_start_from_early_expedition" type="bool" value="false" />
+	<value name="dev_mode" type="bool" value="false" />
+	<value name="disable_debug_widget" type="bool" value="true" />
+	<value name="disable_game_events_auto_launches" type="bool" value="false" />
+	<value name="disable_interface" type="bool" value="false" />
+	<value name="disable_tutorial" type="bool" value="false" />
+	<value name="game_event_whitelist" type="string" value="" />
+	<value name="min_progress_required" type="bool" value="false" />
+	<value name="replay_record" type="bool" value="false" />
+	<value name="reset_game" type="bool" value="false" />
+	<value name="reset_game_and_packs" type="bool" value="false" />
+	<value name="run_only_match3" type="bool" value="false" />
+	<value name="show_download_speed" type="bool" value="false" />
+	<value name="show_fps" type="bool" value="false" />
+	<value name="show_memory" type="bool" value="false" />
+	<value name="show_perfomanceCounter" type="bool" value="false" />
+	<value name="show_temperature" type="bool" value="false" />
+	<value name="show_time" type="bool" value="false" />
+	<value name="skip_by_longtap" type="bool" value="false" />
+	<value name="skip_start_tutorial" type="bool" value="false" />
+	<value name="test_update_server" type="bool" value="false" />
+	<value name="unlock_fps" type="bool" value="false" />
+</values>
