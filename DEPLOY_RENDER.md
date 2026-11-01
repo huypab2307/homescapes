@@ -85,7 +85,7 @@ Không điền mật khẩu Admin hoặc secret vào client. License key/token c
 RAM của ứng dụng; đóng EXE cần nhập key lại. Device ID được băm từ Windows
 MachineGuid; cài lại Windows có thể cần Admin gỡ khóa máy.
 
-Builder chỉ đóng gói `gateway.ts`, `remote.ts`, `errors.ts` và UI đã build, Node,
+Builder chỉ đóng gói `gateway.ts`, `remote.ts`, `errors.ts`, `deviceId.ts` và UI đã build, Node,
 ADB. Nó không đóng gói `src/engine`, `data`, `licenses.ts`, Admin hoặc `pg`.
 Mã frontend chỉ bao gồm hiển thị/điều khiển và các hằng số catalog.
 Có thể chia sẻ EXE cho người dùng; giữ source server và quyền quản trị riêng.
@@ -114,3 +114,51 @@ Production `npm start` với `HC_CLOUD_MODE=1` luôn yêu cầu PostgreSQL thậ
 Bản kiểm tra không kết nối PostgreSQL production hoặc emulator thật. EXE phải
 build/chạy thử trên Windows; môi trường Linux không xác nhận được WebView2/ADB
 trên máy người dùng. Các bài kiểm tra fixture Windows riêng có thể bị skip.
+
+## Giao diện VIP mới
+
+Màn hình đăng nhập nền tối tím/xanh theo mẫu, hỗ trợ VI/EN, Device ID có nút
+sao chép. Device ID hiển thị dạng `VIP-XXXX-XXXX-XXXX-XXXX-XXXX`, ổn định trên
+cùng máy; liên kết nội bộ vẫn giữ nguyên để key cũ không phải gỡ khóa lại.
+Key mới do Admin tạo cũng có dạng `VIP-XXXX-XXXX-XXXX-XXXX-XXXX` (20 ký tự
+ngẫu nhiên). Đây là định dạng, không phải key dùng chung. Key cũ `HC-…` vẫn
+đăng nhập được nếu còn hợp lệ. Chỉ key được server tạo/lưu mới có quyền truy cập.
+
+Cần deploy lại server để Admin sinh key VIP, rồi build lại EXE bằng
+`BUILD_EXE.bat` để nhận màn hình mới. Không xóa database hiện tại và không đổi
+`HC_SESSION_SECRET` chỉ vì cập nhật giao diện.
+
+## Owner cấp key ngay trong EXE
+
+Bản cập nhật đã cấu hình mã băm của key Owner riêng do chủ dự án chỉ định.
+Không cần tạo key Owner tại trang web và không cần thêm biến môi trường mới.
+Sau khi deploy lại, server tự thêm một license Owner vĩnh viễn vào database;
+chỉ tạo một lần, không reset liên kết máy hoặc khôi phục key đã bị thu hồi.
+Database cũ tự bổ sung cột role và giữ nguyên toàn bộ key thường.
+
+1. Deploy lại server từ mã nguồn mới, giữ database/password/secret đang dùng.
+2. Build lại EXE bằng `BUILD_EXE.bat`.
+3. Nhập key Owner đã chỉ định tại màn hình đăng nhập.
+4. Trong giao diện chính, bấm **Cấp key · Owner** cạnh nút đăng xuất.
+5. Chọn 7/30/365 ngày hoặc vĩnh viễn, nhập ghi chú, bấm **Tạo key VIP**.
+6. Sao chép key ngay để cấp cho người dùng. Có thể xem danh sách, gỡ khóa máy,
+   thu hồi key thường ngay trong cửa sổ này.
+
+Key thường không hiển thị nút cấp key. Server vẫn xác thực quyền từ database
+ở từng lệnh quản lý: sửa UI hoặc gửi `isOwner: true` không nâng quyền được.
+Key do Owner tạo luôn là key thường, không thể tạo thêm Owner từ EXE.
+Key Owner cũng dùng được các tính năng chỉnh save như người dùng thường.
+
+Owner khóa vào một máy ở lần đăng nhập đầu. Nếu chuyển máy, dùng web `/admin`
+đăng nhập bằng `HC_ADMIN_PASSWORD` rồi gỡ khóa dòng OWNER. Việc quản lý key
+Owner chỉ làm qua web Admin để tránh tự thu hồi hoặc tự gỡ khóa nhầm trong EXE.
+Mật khẩu web Admin vẫn hoạt động như trước.
+
+EXE không chứa key Owner dạng rõ hoặc mã băm dùng để kiểm tra Owner. Gateway
+chỉ dùng key người dùng nhập để đăng nhập server; server mới quyết định quyền.
+Không đưa key Owner cho người dùng thường.
+
+Kiểm tra: `npm run test:owner` (migration database cũ, key Owner khóa máy, cấp
+key qua gateway EXE, chặn key thường/giả quyền, thu hồi/hết hạn/hạ quyền ngay,
+không khôi phục Owner bị thu hồi sau restart). Kiểm tra tích hợp dùng database
+tạm; chưa phải xác nhận PostgreSQL production hoặc Windows EXE thực tế.

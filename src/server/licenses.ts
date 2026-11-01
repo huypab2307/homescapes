@@ -4,15 +4,18 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { SessionError } from './errors.ts';
 
-type License = { id: string; key_hash: string; hint: string; note: string; created_at: number; expires_at: number; device_hash: string | null; revoked: number; version: number };
+type License = { id: string; key_hash: string; hint: string; note: string; created_at: number; expires_at: number; device_hash: string | null; revoked: number; version: number; role: 'user' | 'owner' };
 type Claims = { role: 'admin' | 'user'; sub: string; device: string; version: number; exp: number };
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 const now = () => Math.floor(Date.now() / 1000);
 const secret = process.env.HC_SESSION_SECRET ?? '';
 const password = process.env.HC_ADMIN_PASSWORD ?? '';
+const ownerKeyHash = process.env.HC_OWNER_KEY_HASH ?? '40176778b564e53f35f0adb51b256e2c4d161df4db63ea9f60db0218bf25d444';
+const OWNER_ID = 'hc-owner-bootstrap-v1';
 let query: (sql: string, params?: unknown[]) => Promise<any[]>;
 let ready: Promise<void> | undefined;
 export function initLicenses() { return ready ??= (async () => {
+  if (!/^[a-f0-9]{64}$/i.test(ownerKeyHash)) throw new Error('HC_OWNER_KEY_HASH must be a SHA-256 hex hash.');
   if (secret.length < 32 || password.length < 12) throw new Error('Set HC_SESSION_SECRET (32+ characters) and HC_ADMIN_PASSWORD (12+ characters).');
   if (process.env.DATABASE_URL) {
     const { Pool } = await import('pg');
@@ -31,7 +34,18 @@ export function initLicenses() { return ready ??= (async () => {
   await query(`CREATE TABLE IF NOT EXISTS hc_licenses (
     id TEXT PRIMARY KEY, key_hash TEXT UNIQUE NOT NULL, hint TEXT NOT NULL,
     note TEXT NOT NULL, created_at BIGINT NOT NULL, expires_at BIGINT NOT NULL,
-    device_hash TEXT, revoked INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1)`);
+    device_hash TEXT, revoked INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1, role TEXT NOT NULL DEFAULT 'user')`);
+  // Upgrade existing installations without changing keys, bindings or expiry.
+  if (process.env.DATABASE_URL) {
+    await query("ALTER TABLE hc_licenses ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user'");
+  } else {
+    const columns = await query('PRAGMA table_info(hc_licenses)');
+    if (!columns.some(c => c.name === 'role')) await query("ALTER TABLE hc_licenses ADD COLUMN role TEXT NOT NULL DEFAULT 'user'");
+  }
+  // Seed once. Never undo a web-admin revocation/unbind or reset the owner device.
+  await query(`INSERT INTO hc_licenses (id,key_hash,hint,note,created_at,expires_at,role)
+    VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING RETURNING id`,
+    [OWNER_ID, ownerKeyHash.toLowerCase(), 'OWNER', 'Owner — issue keys in desktop', now(), 0, 'owner']);
 })(); }
 function sign(c: Omit<Claims, 'exp'>) {
   const data = Buffer.from(JSON.stringify({ ...c, exp: now() + 1800 })).toString('base64url');
@@ -48,13 +62,17 @@ function claims(req: IncomingMessage): Claims {
   if (!Number.isFinite(c.exp) || c.exp <= now()) throw new SessionError('Login expired. Please log in again.', 401);
   return c;
 }
-export async function licenseScope(req: IncomingMessage) {
+async function authorizedLicense(req: IncomingMessage) {
   await initLicenses();
   const c = claims(req);
   if (c.role !== 'user') throw new SessionError('A license login is required', 401);
   const [l] = await query('SELECT * FROM hc_licenses WHERE id=$1', [c.sub]) as License[];
   if (!l || l.revoked || (Number(l.expires_at) !== 0 && Number(l.expires_at) <= now()) || l.device_hash !== c.device || Number(l.version) !== c.version) throw new SessionError('Key expired, revoked or device binding changed. Please log in again.', 401);
-  return l.id + ':' + c.device + ':' + c.version;
+  return l;
+}
+export async function licenseScope(req: IncomingMessage) {
+  const l = await authorizedLicense(req);
+  return l.id + ':' + l.device_hash + ':' + l.version;
 }
 const attempts = new Map<string, { count: number; until: number }>();
 function throttle(req: IncomingMessage) {
@@ -91,7 +109,7 @@ export async function handleLicenses(req: IncomingMessage, res: ServerResponse, 
     await query('UPDATE hc_licenses SET device_hash=$1 WHERE id=$2 AND device_hash IS NULL RETURNING id', [device, l.id]);
     const [bound] = await query('SELECT * FROM hc_licenses WHERE id=$1', [l.id]) as License[];
     if (!bound || bound.revoked || (Number(bound.expires_at) !== 0 && Number(bound.expires_at) <= now()) || bound.device_hash !== device) throw new SessionError('Key is already linked to another device, expired or revoked', 401);
-    send(res, { accessToken: sign({ role: 'user', sub: l.id, device, version: Number(bound.version) }), expiresAt: Number(l.expires_at), tokenSeconds: 1800 }); return true;
+    send(res, { accessToken: sign({ role: 'user', sub: l.id, device, version: Number(bound.version) }), expiresAt: Number(l.expires_at), tokenSeconds: 1800, isOwner: bound.role === 'owner' }); return true;
   }
   if (path === '/api/admin/login') {
     throttle(req); const b = await readJson(req);
@@ -99,22 +117,29 @@ export async function handleLicenses(req: IncomingMessage, res: ServerResponse, 
     send(res, { accessToken: sign({ role: 'admin', sub: 'admin', device: '', version: 1 }) }); return true;
   }
   const c = claims(req);
-  if (c.role !== 'admin') throw new SessionError('Admin login required', 403);
+  if (c.role !== 'admin') {
+    const caller = await authorizedLicense(req);
+    if (caller.role !== 'owner') throw new SessionError('Owner permission required to manage keys', 403);
+  }
   if (path === '/api/admin/licenses' && req.method === 'GET') {
-    const rows = await query('SELECT id,hint,note,created_at,expires_at,device_hash,revoked,version FROM hc_licenses ORDER BY created_at DESC LIMIT 1000');
+    const rows = await query('SELECT id,hint,note,created_at,expires_at,device_hash,revoked,version,role FROM hc_licenses ORDER BY created_at DESC LIMIT 1000');
     send(res, { licenses: rows.map(l => ({ ...l, bound: !!l.device_hash, device_hash: undefined })) }); return true;
   }
   const b = await readJson(req);
   if (path === '/api/admin/create') {
     const days = Number(b.days);
     if (!Number.isInteger(days) || days < 0 || days > 36500 || typeof b.note !== 'string' || b.note.length > 500) throw new SessionError('days must be 0–36500; note max 500 characters', 400);
-    const key = 'HC-' + randomBytes(20).toString('hex').toUpperCase().match(/.{1,8}/g)!.join('-');
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const text = Array.from(randomBytes(20), b => alphabet[b & 31]).join('');
+    const key = 'VIP-' + text.match(/.{4}/g)!.join('-');
     const id = randomUUID(); const expires = days ? now() + days * 86400 : 0;
     await query('INSERT INTO hc_licenses (id,key_hash,hint,note,created_at,expires_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id', [id, hash(key), key.slice(-8), b.note, now(), expires]);
     send(res, { id, key, expiresAt: expires }); return true;
   }
   if (['/api/admin/revoke', '/api/admin/unbind'].includes(path)) {
     if (typeof b.id !== 'string') throw new SessionError('License ID required', 400);
+    const [target] = await query('SELECT role FROM hc_licenses WHERE id=$1', [b.id]);
+    if (c.role !== 'admin' && target?.role === 'owner') throw new SessionError('Use the web Admin to manage owner keys', 403);
     const rows = await query(path.endsWith('revoke') ? 'UPDATE hc_licenses SET revoked=1,version=version+1 WHERE id=$1 RETURNING id' : 'UPDATE hc_licenses SET device_hash=NULL,version=version+1 WHERE id=$1 RETURNING id', [b.id]);
     if (!rows.length) throw new SessionError('Key not found', 404);
     send(res, {}); return true;

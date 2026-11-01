@@ -42,6 +42,7 @@ try{
  const create=async(days=7)=>{const r=await request(cloud,'/api/admin/create',{days,note:'test <script> & unicode tiếng Việt'},adminHeaders());assert.equal(r.status,200,JSON.stringify(r.result));return r.result;};
  const login=async(key,deviceId='test-client-device-0001')=>request(cloud,'/api/auth/login',{key,deviceId});
  const license=await create(); const key=license.key;
+ assert.match(key,/^VIP-(?:[A-HJ-NP-Z2-9]{4}-){4}[A-HJ-NP-Z2-9]{4}$/);
  assert.equal((await login('bad-key')).status,401);
  const signed=await login(key);assert.equal(signed.status,200);
  let headers={authorization:'Bearer '+signed.result.accessToken};
@@ -52,7 +53,12 @@ try{
  assert.equal((await request(cloud,'/api/session/load',{path:fixture},headers)).status,400);
  const listed=await request(cloud,'/api/admin/licenses',undefined,adminHeaders());
  assert.equal(listed.status,200);assert.ok(!JSON.stringify(listed).includes(key));assert.ok(!JSON.stringify(listed).includes('key_hash'));
- const second=await create(0);const secondLogin=await login(second.key,'second-independent-client-01');
+ const second=await create(0);
+ // A key created by the previous HC format must remain usable.
+ const {DatabaseSync: SeedDB}=await import('node:sqlite');const legacyDb=new SeedDB(dbFile);
+ const {createHash}=await import('node:crypto');second.key='HC-OLDKEY01-OLDKEY02-OLDKEY03-OLDKEY04-OLDKEY05';
+ legacyDb.prepare('UPDATE hc_licenses SET key_hash=? WHERE id=?').run(createHash('sha256').update(second.key).digest('hex'),second.id);legacyDb.close();
+ const secondLogin=await login(second.key,'second-independent-client-01');
  assert.equal(secondLogin.result.expiresAt,0);
  const fake=join(temp,'bridge');const pushed=join(temp,'pushed.db');
  writeFileSync(fake,`#!/usr/bin/env python3\nimport sys,json,base64,pathlib\na=sys.argv[1:]\nif a[0]=='pull':\n print(json.dumps({'ok':True,'b64':base64.b64encode(pathlib.Path(${JSON.stringify(fixture)}).read_bytes()).decode(),'file':'/data/data/com.playrix.homescapes/files/SaveGame.db','package':'com.playrix.homescapes'}))\nelif a[0]=='push':\n pathlib.Path(${JSON.stringify(pushed)}).write_bytes(pathlib.Path(a[a.index('--in')+1]).read_bytes())\n print(json.dumps({'ok':True,'relaunched':True,'package':'com.playrix.homescapes'}))\nelse:print(json.dumps({'ok':True,'info':{'found':True,'devices':[]}}))\n`);
@@ -64,6 +70,7 @@ try{
  assert.equal((await request(desktop,'/api/local/auth',{key:desktopLicense.key})).status,200);
  assert.equal((await request(desktop,'/api/remote/config',{url:'',apiKey:''})).status,403);
  const settings=(await request(desktop,'/api/local/auth')).result;
+ assert.match(settings.deviceId,/^VIP-(?:[A-HJ-NP-Z2-9]{4}-){4}[A-HJ-NP-Z2-9]{4}$/);
  assert.equal(settings.loggedIn,true);assert.ok(!('accessToken' in settings));
  const loaded=await request(desktop,'/api/device/pull',{serial:'local-device'});
  assert.equal(loaded.status,200,JSON.stringify(loaded.result));
@@ -109,7 +116,7 @@ try{
  assert.equal((await login(key,'test-client-device-0001')).status,401);
  assert.equal((await login(key,'test-client-device-0002')).status,200);
  admin=(await request(cloud,'/api/admin/login',{password})).result.accessToken;
- assert.equal((await request(cloud,'/api/admin/licenses',undefined,adminHeaders())).result.licenses.length,3);
+ assert.equal((await request(cloud,'/api/admin/licenses',undefined,adminHeaders())).result.licenses.length,4);
  assert.equal((await request(cloud,'/admin')).status,200);
  assert.equal((await request(cloud,'/api/admin/create',{days:-1,note:''},adminHeaders())).status,400);
  let last;for(let i=0;i<18;i++)last=await request(cloud,'/api/admin/login',{password:'bad'});

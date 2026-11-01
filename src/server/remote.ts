@@ -1,5 +1,6 @@
 /** Desktop gateway: ADB/UI stay local; save processing is forwarded over HTTPS. */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { displayDeviceId } from "./deviceId.ts";
 import { randomUUID } from "node:crypto";
 import { writeFile, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -11,9 +12,11 @@ let config: Config = { url: process.env.HC_REMOTE_URL ?? "https://homescapes-sav
 let licenseKey = "";
 let tokenUntil = 0;
 let expiresAt = 0;
+let isOwner = false;
 let refreshPending: Promise<void> | undefined;
 const provenance = new Map<string, { serial: string; package: string; file: string }>();
 const initialize = async () => {};
+function clearAuth() { licenseKey = ''; config.apiKey = ''; isOwner = false; tokenUntil = 0; expiresAt = 0; provenance.clear(); }
 async function activate(key: string) {
   const response = await fetch(endpoint(config.url) + '/api/auth/login', {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -21,12 +24,12 @@ async function activate(key: string) {
   });
   const data = await response.json() as any;
   if (!response.ok) throw new SessionError(data.error ?? 'Login failed', response.status);
-  config.apiKey = data.accessToken; tokenUntil = Date.now() + data.tokenSeconds * 1000; expiresAt = data.expiresAt;
+  config.apiKey = data.accessToken; tokenUntil = Date.now() + data.tokenSeconds * 1000; expiresAt = data.expiresAt; isOwner = data.isOwner === true;
 }
 async function ensureToken() {
   if (!licenseKey) throw new SessionError('Please log in with your license key', 401);
   if (Date.now() < tokenUntil - 60000) return;
-  await (refreshPending ??= activate(licenseKey).catch(error => { config.apiKey = ''; licenseKey = ''; throw error; }).finally(() => { refreshPending = undefined; }));
+  await (refreshPending ??= activate(licenseKey).catch(error => { clearAuth(); throw error; }).finally(() => { refreshPending = undefined; }));
 }
 async function body(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = []; let size = 0;
@@ -51,7 +54,7 @@ async function remote(path: string, method = "GET", data?: Buffer | object, sett
       body: data === undefined ? undefined : Buffer.isBuffer(data) ? new Uint8Array(data) : JSON.stringify(data),
       signal: AbortSignal.timeout(120_000), redirect: "error",
     });
-    if (response.status === 401) { licenseKey = ''; config.apiKey = ''; provenance.clear(); }
+    if (response.status === 401) { clearAuth(); }
     return response;
   } catch {
     throw new SessionError("Cannot reach Render. Check the URL, connection and server status, then retry. Your game has not been pushed.", 502);
@@ -75,13 +78,13 @@ export async function handleRemote(req: IncomingMessage, res: ServerResponse, ur
   if (url.pathname === '/api/local/auth') {
     if (req.method === 'POST') {
       const data = JSON.parse((await body(req)).toString());
-      if (data.logout) { licenseKey = ''; config.apiKey = ''; provenance.clear(); }
+      if (data.logout) { clearAuth(); }
       else {
         if (typeof data.key !== 'string' || data.key.length > 256) throw new SessionError('Invalid license key', 400);
         await activate(data.key.trim()); licenseKey = data.key.trim(); provenance.clear();
       }
     } else if (req.method !== 'GET') throw new SessionError('Method not allowed', 405);
-    send(res, { ok: true, loggedIn: !!licenseKey && !!config.apiKey, deviceId: config.clientId, url: config.url, expiresAt });
+    send(res, { ok: true, loggedIn: !!licenseKey && !!config.apiKey, deviceId: displayDeviceId(config.clientId), url: config.url, expiresAt, isOwner: !!licenseKey && !!config.apiKey && isOwner });
     return true;
   }
   if (url.pathname === '/api/remote/config') {
@@ -148,7 +151,7 @@ export async function handleRemote(req: IncomingMessage, res: ServerResponse, ur
   // Stream the protocol response back. Never expose the server API key to JS.
   const response = await remote(url.pathname + url.search, req.method,
     req.method === "GET" ? undefined : await body(req));
-  if (response.status === 401) { licenseKey = ''; config.apiKey = ''; provenance.clear(); }
+  if (response.status === 401) { clearAuth(); }
   res.writeHead(response.status, { "content-type": response.headers.get("content-type") ?? "application/json", "cache-control": "no-store" });
   res.end(Buffer.from(await response.arrayBuffer()));
   return true;
