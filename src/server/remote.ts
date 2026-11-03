@@ -2,9 +2,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { displayDeviceId } from "./deviceId.ts";
 import { randomUUID } from "node:crypto";
-import { writeFile, mkdtemp, rm } from "node:fs/promises";
+import { writeFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { SessionError } from "./errors.ts";
 
 interface Config { url: string; apiKey: string; clientId: string }
@@ -13,6 +13,7 @@ let licenseKey = "";
 let tokenUntil = 0;
 let expiresAt = 0;
 let isOwner = false;
+let newAccountBusy = false;
 let refreshPending: Promise<void> | undefined;
 const provenance = new Map<string, { serial: string; package: string; file: string }>();
 const initialize = async () => {};
@@ -75,6 +76,7 @@ function send(res: ServerResponse, result: unknown, status = 200) {
 export async function handleRemote(req: IncomingMessage, res: ServerResponse, url: URL,
   bridge: (args: string[]) => Promise<any>): Promise<boolean> {
   await initialize();
+  if (newAccountBusy && url.pathname.startsWith('/api/') && url.pathname !== '/api/health') throw new SessionError('New-account operation in progress. Wait until it finishes.', 409);
   if (url.pathname === '/api/local/auth') {
     if (req.method === 'POST') {
       const data = JSON.parse((await body(req)).toString());
@@ -96,6 +98,46 @@ export async function handleRemote(req: IncomingMessage, res: ServerResponse, ur
   await ensureToken();
   // Device controls remain on the local bridge, including discovery and backup restore.
   if (["/api/devices", "/api/device/stop", "/api/device/start", "/api/device/restore"].includes(path)) return false;
+
+  if (path === '/api/fresh-start/new-account') {
+    if (req.method !== 'POST') throw new SessionError('Method not allowed', 405);
+    const data = JSON.parse((await body(req)).toString());
+    const source = provenance.get(data.sessionId);
+    if (data.confirmation !== 'FORMAT_REMOVE_FINAL_BRACE') throw new SessionError('Confirm the new-account experiment first', 400);
+    if (!source || source.serial !== data.serial) throw new SessionError('Connect the selected device again before trying a new account', 400);
+    newAccountBusy = true;
+    let localBackup = '';
+    try {
+      // The bridge selects the package first, then stops that package and rereads its save.
+      const pulled = await bridge(['pull', '--serial', data.serial, '--stop-first']);
+      if (!pulled.ok || !pulled.b64 || pulled.package !== source.package || pulled.file !== source.file) throw new SessionError('The device save source changed. Connect again; nothing was written.', 400);
+      const original = Buffer.from(pulled.b64, 'base64');
+      if (original.length < 16 || original.length > 64 * 1024 * 1024) throw new SessionError('Invalid backup size; nothing was written', 400);
+      const backupDir = process.env.HC_BACKUP_DIR ?? join(process.env.LOCALAPPDATA ?? homedir(), 'HomescapesSaveStudio', 'backups');
+      await mkdir(backupDir, { recursive: true });
+      localBackup = join(backupDir, `before-new-account-${Date.now()}-${randomUUID()}.db`);
+      await writeFile(localBackup, original, { flag: 'wx', mode: 0o600 });
+      const prepared = await jsonRemote('/api/fresh-start/prepare', { sessionId: data.sessionId, b64: pulled.b64, confirmation: data.confirmation });
+      if (prepared.method !== data.confirmation || typeof prepared.b64 !== 'string') throw new SessionError('Server did not return the expected reset payload', 502);
+      const output = Buffer.from(prepared.b64, 'base64');
+      if (output.length < 16 || output.length > 64 * 1024 * 1024) throw new SessionError('Invalid reset payload size', 502);
+      const folder = await mkdtemp(join(tmpdir(), 'hcs-new-account-'));
+      try {
+        const file = join(folder, 'SaveGame.db'); await writeFile(file, output);
+        // Retire all mappings from this device, so stale sessions cannot be pushed afterwards.
+        const retired = [...provenance].filter(([, entry]) => entry.serial === data.serial).map(([id]) => id);
+        for (const id of retired) provenance.delete(id);
+        const result = await bridge(['push', '--serial', data.serial, '--in', file, '--require-backup', '--expect-package', source.package, '--expect-file', source.file]);
+        if (!result.ok) throw new SessionError(result.error ?? 'Could not install the reset payload', 400);
+        await Promise.allSettled(retired.map(sessionId => jsonRemote('/api/session/close', { sessionId })));
+        send(res, { ...result, ok: true, localBackup, experiment: true, needsReconnect: true });
+      } finally { await rm(folder, { recursive: true, force: true }); }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new SessionError(message + (localBackup ? ` Backup retained: ${localBackup}` : ''), error instanceof SessionError ? error.status : 500);
+    } finally { newAccountBusy = false; }
+    return true;
+  }
 
   const uploaded = async (serial: string) => {
     if (!serial) throw new SessionError("Select a device first", 400);

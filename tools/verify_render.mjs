@@ -60,10 +60,10 @@ try{
  legacyDb.prepare('UPDATE hc_licenses SET key_hash=? WHERE id=?').run(createHash('sha256').update(second.key).digest('hex'),second.id);legacyDb.close();
  const secondLogin=await login(second.key,'second-independent-client-01');
  assert.equal(secondLogin.result.expiresAt,0);
- const fake=join(temp,'bridge');const pushed=join(temp,'pushed.db');
- writeFileSync(fake,`#!/usr/bin/env python3\nimport sys,json,base64,pathlib\na=sys.argv[1:]\nif a[0]=='pull':\n print(json.dumps({'ok':True,'b64':base64.b64encode(pathlib.Path(${JSON.stringify(fixture)}).read_bytes()).decode(),'file':'/data/data/com.playrix.homescapes/files/SaveGame.db','package':'com.playrix.homescapes'}))\nelif a[0]=='push':\n pathlib.Path(${JSON.stringify(pushed)}).write_bytes(pathlib.Path(a[a.index('--in')+1]).read_bytes())\n print(json.dumps({'ok':True,'relaunched':True,'package':'com.playrix.homescapes'}))\nelse:print(json.dumps({'ok':True,'info':{'found':True,'devices':[]}}))\n`);
+ const fake=join(temp,'bridge');const pushed=join(temp,'pushed.db');const bridgeLog=join(temp,'bridge-log.jsonl');
+ writeFileSync(fake,`#!/usr/bin/env python3\nimport sys,json,base64,pathlib\na=sys.argv[1:]\nwith pathlib.Path(${JSON.stringify(bridgeLog)}).open('a') as log: log.write(json.dumps(a)+'\\n')\nif a[0]=='pull':\n print(json.dumps({'ok':True,'b64':base64.b64encode(pathlib.Path(${JSON.stringify(fixture)}).read_bytes()).decode(),'file':'/data/data/com.playrix.homescapes/files/SaveGame.db','package':'com.playrix.homescapes'}))\nelif a[0]=='push':\n pathlib.Path(${JSON.stringify(pushed)}).write_bytes(pathlib.Path(a[a.index('--in')+1]).read_bytes())\n print(json.dumps({'ok':True,'relaunched':True,'package':'com.playrix.homescapes','toolBackup':'/data/data/com.playrix.homescapes/files/SaveGame.db.hcsbak'}))\nelse:print(json.dumps({'ok':True,'info':{'found':True,'devices':[]}}))\n`);
  chmodSync(fake,0o755);
- const desktop=await start({HC_CLOUD_MODE:'0',HC_ALLOW_HTTP_REMOTE:'1',HC_REMOTE_URL:cloud,HC_DEVICE_ID:'desktop-machine-id-0001',HC_BRIDGE_EXE:fake}, 'src/server/gateway.ts');
+ const desktop=await start({HC_CLOUD_MODE:'0',HC_ALLOW_HTTP_REMOTE:'1',HC_REMOTE_URL:cloud,HC_DEVICE_ID:'desktop-machine-id-0001',HC_BRIDGE_EXE:fake,HC_BACKUP_DIR:join(temp,'backups')}, 'src/server/gateway.ts');
  assert.equal((await request(desktop,'/api/sessions')).status,401);
  assert.equal((await request(desktop,'/api/local/auth',{key:'wrong'})).status,401);
  const desktopLicense=await create(30);
@@ -96,6 +96,31 @@ try{
  assert.equal(reset.status,200);assert.notEqual(reset.result.overview.meta.id,id);
  assert.equal((await request(desktop,'/api/device/push',{sessionId:reset.result.overview.meta.id,serial:'local-device'})).status,200);
  assert.equal((await request(desktop,'/api/remote/config',{url:'https://example.com',apiKey:key},{origin:'https://untrusted.example'})).status,403);
+ // New-account experiment: no work without explicit confirmation or matching provenance.
+ const experimentId=reset.result.overview.meta.id;
+ assert.equal((await request(desktop,'/api/fresh-start/new-account',{serial:'local-device',sessionId:experimentId})).status,400);
+ assert.equal((await request(desktop,'/api/fresh-start/new-account',{serial:'wrong-device',sessionId:experimentId,confirmation:'FORMAT_REMOVE_FINAL_BRACE'})).status,400);
+ assert.equal((await request(cloud,'/api/fresh-start/prepare',{sessionId:experimentId,b64:readFileSync(fixture).toString('base64'),confirmation:'FORMAT_REMOVE_FINAL_BRACE'},headers)).status,404);
+ // A local backup failure must prevent the push entirely.
+ const blockedDir=join(temp,'backup-file');writeFileSync(blockedDir,'not a directory');
+ const blocked=await start({HC_ALLOW_HTTP_REMOTE:'1',HC_REMOTE_URL:cloud,HC_DEVICE_ID:'desktop-machine-id-0001',HC_BRIDGE_EXE:fake,HC_BACKUP_DIR:join(blockedDir,'child')},'src/server/gateway.ts');
+ assert.equal((await request(blocked,'/api/local/auth',{key:desktopLicense.key})).status,200);
+ const blockedLoad=await request(blocked,'/api/device/pull',{serial:'local-device'});
+ const pushedBefore=readFileSync(pushed);
+ const blockedResult=await request(blocked,'/api/fresh-start/new-account',{serial:'local-device',sessionId:blockedLoad.result.overview.meta.id,confirmation:'FORMAT_REMOVE_FINAL_BRACE'});
+ assert.equal(blockedResult.status,500);assert.deepEqual(readFileSync(pushed),pushedBefore);
+ const experiment=await request(desktop,'/api/fresh-start/new-account',{serial:'local-device',sessionId:experimentId,confirmation:'FORMAT_REMOVE_FINAL_BRACE'});
+ assert.equal(experiment.status,200,JSON.stringify(experiment.result));
+ assert.ok(experiment.result.needsReconnect);assert.deepEqual(readFileSync(experiment.result.localBackup),readFileSync(fixture));
+ const brokenText=readFileSync(pushed,'utf8').replace(/\x00+$/,'');
+ assert.throws(()=>JSON.parse(brokenText));
+ assert.deepEqual(JSON.parse(brokenText+'}'),JSON.parse(readFileSync(fixture,'utf8').replace(/\x00+$/,'')));
+ assert.match(brokenText,/\r\n    "/);
+ const bridgeCalls=readFileSync(bridgeLog,'utf8').trim().split('\n').map(JSON.parse);
+ assert.ok(bridgeCalls.some(args=>args[0]==='pull'&&args.includes('--stop-first')));
+ assert.ok(bridgeCalls.some(args=>args[0]==='push'&&args.includes('--require-backup')&&args.includes('--expect-package')&&args.includes('--expect-file')));
+ assert.equal((await request(desktop,'/api/device/push',{sessionId:experimentId,serial:'local-device'})).status,400);
+ assert.equal((await request(desktop,'/api/overview?sessionId='+experimentId)).status,404);
  // Immediate revocation rejects the next edit, and invalidates the local login.
  assert.equal((await request(cloud,'/api/admin/revoke',{id:desktopLicense.id},adminHeaders())).status,200);
  assert.equal((await request(desktop,'/api/sessions')).status,401);
@@ -121,7 +146,7 @@ try{
  assert.equal((await request(cloud,'/api/admin/create',{days:-1,note:''},adminHeaders())).status,400);
  let last;for(let i=0;i<18;i++)last=await request(cloud,'/api/admin/login',{password:'bad'});
  assert.equal(last.status,429);
- console.log('PASS: license creation/login/hash-at-rest, binding, isolation, token validation, revoke/unbind/expiry, persistent restart, rate limits; thin gateway pull -> cloud edit/MAX_GP -> local Push; clone, legacy unlock, reset and CSRF.');
+ console.log('PASS: license creation/login/hash-at-rest, binding, isolation, token validation, revoke/unbind/expiry, persistent restart, rate limits; thin gateway pull -> cloud edit/MAX_GP -> local Push; clone, legacy unlock, reset and CSRF; fresh-start formatting/backup/failure-before-write/stale-session rejection.');
 
 }finally{
  for(const child of processes)child.kill();

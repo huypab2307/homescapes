@@ -37,6 +37,7 @@ import { handleLicenses, initLicenses } from "./licenses.ts";
 import { CLOUD, cloudScope } from "./cloud.ts";
 import { handleRemote } from "./remote.ts";
 import { dropSession, withSessionScope } from "./session.ts";
+import { prepareNewAccount, NEW_ACCOUNT_CONFIRMATION } from "../engine/new-account.ts";
 import { MAX_GP } from "../engine/MAX_GP.ts";
 import { asciiTokens, decodeBlkZstd, scanVsoDir, uniqueTokens } from "../engine/upk.ts";
 import {
@@ -243,6 +244,24 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
   if (route === "GET /api/sessions") {
     sendJson(res, 200, { ok: true, sessions: listSessions() });
     return;
+  }
+
+  if (route === "POST /api/fresh-start/prepare") {
+    const body = await readJson<{ sessionId: string; b64: string; confirmation: string }>(req);
+    if (body.confirmation !== NEW_ACCOUNT_CONFIRMATION || !body.sessionId || typeof body.b64 !== 'string') throw new SessionError('Confirm the new-account experiment and Connect this device first', 400);
+    resolveSession(body.sessionId); // enforce license/session ownership
+    const bytes = b64ToBytes(body.b64);
+    if (bytes.byteLength < 16 || bytes.byteLength > 64 * 1024 * 1024) throw new SessionError('Invalid save size', 400);
+    const result = prepareNewAccount(bytes);
+    sendJson(res, 200, { ok: true, b64: bytesToB64(result.bytes), method: result.method, wasEncrypted: result.wasEncrypted });
+    return;
+  }
+
+  if (route === "POST /api/session/close") {
+    const body = await readJson<{ sessionId: string }>(req);
+    if (!body.sessionId) throw new SessionError('Session ID required', 400);
+    resolveSession(body.sessionId); dropSession(body.sessionId);
+    sendJson(res, 200, { ok: true }); return;
   }
 
   if (route === "POST /api/session/load") {

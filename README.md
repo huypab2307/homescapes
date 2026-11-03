@@ -39,3 +39,41 @@ trong tài liệu đó áp dụng cho gói client riêng, không phải gói ser
 
 Save sessions nằm trong RAM; Connect lại sau deploy/restart. Chỉ chạy một
 instance server vì sessions chưa chia sẻ giữa replica. Không đưa secret vào Git.
+
+## Fresh Start — thử khởi tạo tài khoản mới
+
+Mục **Fresh Start** hiện có nút **Sao lưu & thử tạo tài khoản mới** ở đầu trang.
+Đây là luồng riêng với các ô chỉnh level/coins/stars cũ.
+
+1. Deploy server mới, build và mở EXE mới.
+2. Chọn MEmu phụ và bấm Connect để đọc save hiện tại.
+3. Hủy hoặc lưu các chỉnh sửa còn đang chờ.
+4. Mở Fresh Start → Sao lưu & thử tạo tài khoản mới → đọc và xác nhận.
+5. Ứng dụng chọn đúng package Global/VN, dừng game, đọc lại save, giữ một bản
+   sao lưu riêng trên máy tính, nhờ server format JSON (4 dấu cách, CRLF) rồi
+   bỏ đúng dấu `}` đóng object gốc cuối cùng. Với save XOR, giữ nguyên kiểu
+   mã hóa và trailer nguồn. Không thay level, ID hay các giá trị dữ liệu.
+6. Chỉ ghi nếu bản .hcsbak trên máy game cũng sao lưu thành công; sau đó mở game.
+7. Kiểm tra Player ID có đổi không. Đợi game khởi tạo xong rồi bấm Connect lại.
+
+Phương pháp khớp byte với file test đã được chủ dự án báo thành công. Không bảo
+đảm mọi phiên bản sẽ tạo tài khoản mới: game có thể khôi phục bản cũ hoặc không
+mở được. Luồng này là thử nghiệm, không giả lập hay tự cấp Player ID từ tool.
+
+Có nút **Khôi phục save trước đó** dùng bản .hcsbak gần nhất trên thiết bị.
+Ngoài ra, bản gốc được giữ riêng trên máy tính tại:
+`%LOCALAPPDATA%\HomescapesSaveStudio\backups\before-new-account-…db`.
+Đường dẫn cụ thể hiện trong giao diện sau khi ghi thành công hoặc thông báo lỗi.
+Các bản riêng trên máy tính không bị ghi đè bởi Push lần sau. Bản .hcsbak trên
+máy game có thể bị thay bởi lần Push tiếp theo. Khôi phục file cục bộ không bảo
+đảm khôi phục được liên kết hồ sơ trên server sau khi game đã đổi Player ID.
+Nếu thao tác thất bại, game có thể còn đang dừng: mở lại thủ công hoặc khôi phục.
+
+Sau thao tác, phiên cũ bị loại khỏi luồng Push; phải Connect lại trước khi sửa.
+Không xóa database, không đổi key Owner, không đổi secret khi cập nhật bản này.
+Client và server phải cùng bản có endpoint `/api/fresh-start/prepare` và gateway
+`/api/fresh-start/new-account`. Cần build lại EXE để có bridge với kiểm tra backup.
+
+Đã kiểm tra formatter, XOR/trailer, quyền session, sao lưu thất bại không ghi,
+chặn nhầm thiết bị, chặn Push session cũ và ưu tiên Global/VN. Chưa chạy EXE
+hoặc emulator thật trong môi trường build Linux.

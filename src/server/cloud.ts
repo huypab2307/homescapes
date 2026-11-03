@@ -4,7 +4,7 @@ import { SessionError } from "./session.ts";
 
 export const CLOUD = process.env.HC_CLOUD_MODE === "1";
 const routes = new Set([
-  "/api/health", "/api/sessions", "/api/session/load", "/api/session/reset", "/api/overview",
+  "/api/session/close", "/api/fresh-start/prepare", "/api/health", "/api/sessions", "/api/session/load", "/api/session/reset", "/api/overview",
   "/api/values", "/api/discover", "/api/field", "/api/apply", "/api/export",
   "/api/cosmetics/catalog", "/api/cosmetics/state", "/api/cosmetics", "/api/cards/grant",
   "/api/clone/source", "/api/clone-content", "/api/seasonpass/unlock", "/api/seasonpass/max-gp",
