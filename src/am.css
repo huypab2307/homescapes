@@ -2000,3 +2000,6 @@
     height: 34px;
   }
 }
+
+/* Wide name-style previews keep the full screenshot crop visible. */
+.am-cos-tile--style { width: 112px; flex-basis: 112px; object-fit: contain; }

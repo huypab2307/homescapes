@@ -225,7 +225,7 @@ export function CosmeticsKindSection({ kind }: { kind: string }) {
               return (
                 <div className="am-checkrow am-checkrow--cos" key={it.id}>
                   {it.icon ? (
-                    <img className="am-cos-tile" src={it.icon} alt="" />
+                    <img className={group.kind === "styles" ? "am-cos-tile am-cos-tile--style" : "am-cos-tile"} src={it.icon} alt="" />
                   ) : it.swatch ? (
                     // The basic frames are named for the colour they render, so
                     // showing that colour is the item itself, not stand-in art.
