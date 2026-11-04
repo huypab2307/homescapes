@@ -2,7 +2,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { displayDeviceId } from "./deviceId.ts";
 import { randomUUID } from "node:crypto";
-import { writeFile, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { writeFile, readFile, readdir, open, rename, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { SessionError } from "./errors.ts";
@@ -99,42 +99,57 @@ export async function handleRemote(req: IncomingMessage, res: ServerResponse, ur
   // Device controls remain on the local bridge, including discovery and backup restore.
   if (["/api/devices", "/api/device/stop", "/api/device/start", "/api/device/restore"].includes(path)) return false;
 
-  if (path === '/api/fresh-start/new-account') {
+  if (path === '/api/fresh-start/new-account' || path === '/api/fresh-start/restore') {
     if (req.method !== 'POST') throw new SessionError('Method not allowed', 405);
     const data = JSON.parse((await body(req)).toString());
+    if (typeof data.serial !== 'string' || !data.serial) throw new SessionError('Chọn thiết bị để tiếp tục', 400);
+    const restoring = path.endsWith('/restore');
     const source = provenance.get(data.sessionId);
-    if (data.confirmation !== 'FORMAT_REMOVE_FINAL_BRACE') throw new SessionError('Confirm the new-account experiment first', 400);
-    if (!source || source.serial !== data.serial) throw new SessionError('Connect the selected device again before trying a new account', 400);
+    if (!restoring && (data.confirmation !== 'DELETE_SAVE_FILES' || !source || source.serial !== data.serial)) throw new SessionError('Kết nối lại thiết bị trước khi tiếp tục', 400);
     newAccountBusy = true;
     let localBackup = '';
     try {
-      // The bridge selects the package first, then stops that package and rereads its save.
-      const pulled = await bridge(['pull', '--serial', data.serial, '--stop-first']);
-      if (!pulled.ok || !pulled.b64 || pulled.package !== source.package || pulled.file !== source.file) throw new SessionError('The device save source changed. Connect again; nothing was written.', 400);
-      const original = Buffer.from(pulled.b64, 'base64');
-      if (original.length < 16 || original.length > 64 * 1024 * 1024) throw new SessionError('Invalid backup size; nothing was written', 400);
       const backupDir = process.env.HC_BACKUP_DIR ?? join(process.env.LOCALAPPDATA ?? homedir(), 'HomescapesSaveStudio', 'backups');
-      await mkdir(backupDir, { recursive: true });
-      localBackup = join(backupDir, `before-new-account-${Date.now()}-${randomUUID()}.db`);
-      await writeFile(localBackup, original, { flag: 'wx', mode: 0o600 });
-      const prepared = await jsonRemote('/api/fresh-start/prepare', { sessionId: data.sessionId, b64: pulled.b64, confirmation: data.confirmation });
-      if (prepared.method !== data.confirmation || typeof prepared.b64 !== 'string') throw new SessionError('Server did not return the expected reset payload', 502);
-      const output = Buffer.from(prepared.b64, 'base64');
-      if (output.length < 16 || output.length > 64 * 1024 * 1024) throw new SessionError('Invalid reset payload size', 502);
-      const folder = await mkdtemp(join(tmpdir(), 'hcs-new-account-'));
-      try {
-        const file = join(folder, 'SaveGame.db'); await writeFile(file, output);
-        // Retire all mappings from this device, so stale sessions cannot be pushed afterwards.
-        const retired = [...provenance].filter(([, entry]) => entry.serial === data.serial).map(([id]) => id);
-        for (const id of retired) provenance.delete(id);
-        const result = await bridge(['push', '--serial', data.serial, '--in', file, '--require-backup', '--expect-package', source.package, '--expect-file', source.file]);
-        if (!result.ok) throw new SessionError(result.error ?? 'Could not install the reset payload', 400);
-        await Promise.allSettled(retired.map(sessionId => jsonRemote('/api/session/close', { sessionId })));
-        send(res, { ...result, ok: true, localBackup, experiment: true, needsReconnect: true });
-      } finally { await rm(folder, { recursive: true, force: true }); }
+      if (restoring) {
+        await jsonRemote('/api/sessions'); // verify license is still valid before restoring
+        let files: string[] = [];
+        try { files = (await readdir(backupDir)).filter(name => /^fresh-start-\d+-[a-f0-9-]+\.json$/.test(name)).sort().reverse(); } catch {}
+        for (const name of files) {
+          try {
+            const record = JSON.parse(await readFile(join(backupDir, name), 'utf8'));
+            if (record.serial === data.serial) { localBackup = join(backupDir, name); break; }
+          } catch { /* Skip incomplete or unavailable records. */ }
+        }
+        if (!localBackup) throw new SessionError('Chưa có bản sao lưu cho thiết bị này', 400);
+      } else {
+        await jsonRemote('/api/fresh-start/authorize', { sessionId: data.sessionId, confirmation: data.confirmation });
+        const snapshot = await bridge(['fresh-start-snapshot', '--serial', data.serial, '--expect-package', source!.package, '--expect-file', source!.file]);
+        if (!snapshot.ok || snapshot.serial !== data.serial || snapshot.package !== source!.package || snapshot.file !== source!.file || !snapshot.files) throw new SessionError('Không thể chuẩn bị bản sao lưu. Hãy kết nối lại thiết bị.', 400);
+        const expected = ['SaveGame.db', 'SaveGame.db.bak', 'SaveGame.db.buf'];
+        if (Object.keys(snapshot.files).length !== 3 || expected.some(name => !(name in snapshot.files))) throw new SessionError('Bản sao lưu chưa đầy đủ', 400);
+        const total = expected.reduce((sum, name) => sum + (typeof snapshot.files[name] === 'string' ? Buffer.from(snapshot.files[name], 'base64').length : 0), 0);
+        if (!snapshot.files['SaveGame.db'] || total < 16 || total > 64 * 1024 * 1024) throw new SessionError('Bản sao lưu không hợp lệ', 400);
+        await mkdir(backupDir, { recursive: true });
+        localBackup = join(backupDir, `fresh-start-${Date.now()}-${randomUUID()}.json`);
+        const pendingBackup = join(backupDir, `.pending-${randomUUID()}.tmp`);
+        try {
+          const handle = await open(pendingBackup, 'wx', 0o600);
+          try { await handle.writeFile(JSON.stringify(snapshot)); await handle.sync(); }
+          finally { await handle.close(); }
+          await rename(pendingBackup, localBackup);
+        } finally { await rm(pendingBackup, { force: true }); }
+        await jsonRemote('/api/fresh-start/authorize', { sessionId: data.sessionId, confirmation: data.confirmation });
+      }
+      const retired = [...provenance].filter(([, entry]) => entry.serial === data.serial).map(([id]) => id);
+      for (const id of retired) provenance.delete(id);
+      const result = await bridge([restoring ? 'fresh-start-restore' : 'fresh-start', '--serial', data.serial, '--snapshot', localBackup]);
+      if (!result.ok) throw new SessionError(restoring ? 'Không thể khôi phục tài khoản trước đó' : 'Không thể hoàn tất. Hãy thử khôi phục tài khoản trước đó.', 400);
+      await Promise.allSettled(retired.map(sessionId => jsonRemote('/api/session/close', { sessionId })));
+      send(res, { ...result, ok: true, localBackup, needsReconnect: true });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new SessionError(message + (localBackup ? ` Backup retained: ${localBackup}` : ''), error instanceof SessionError ? error.status : 500);
+      console.error('Fresh Start:', error instanceof Error ? error.message : String(error));
+      if (error instanceof SessionError) throw error;
+      throw new SessionError('Không thể hoàn tất. Hãy kết nối lại thiết bị hoặc khôi phục tài khoản trước đó.', 500);
     } finally { newAccountBusy = false; }
     return true;
   }

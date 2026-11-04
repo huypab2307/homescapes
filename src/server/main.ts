@@ -33,6 +33,7 @@ import {
   type CosmeticKind,
   type EditOp,
 } from "../engine/index.ts";
+import { handleDesktopUpdates } from "./desktopUpdates.ts";
 import { handleLicenses, initLicenses } from "./licenses.ts";
 import { CLOUD, cloudScope } from "./cloud.ts";
 import { handleRemote } from "./remote.ts";
@@ -244,6 +245,13 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
   if (route === "GET /api/sessions") {
     sendJson(res, 200, { ok: true, sessions: listSessions() });
     return;
+  }
+
+  if (route === "POST /api/fresh-start/authorize") {
+    const body = await readJson<{ sessionId: string; confirmation: string }>(req);
+    if (!body.sessionId || body.confirmation !== 'DELETE_SAVE_FILES') throw new SessionError('Confirm Fresh Start first', 400);
+    resolveSession(body.sessionId);
+    sendJson(res, 200, { ok: true }); return;
   }
 
   if (route === "POST /api/fresh-start/prepare") {
@@ -1032,6 +1040,7 @@ const server = createServer((req, res) => {
 
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${PORT}`);
     try {
+      if (CLOUD && await handleDesktopUpdates(req, res, url.pathname)) return;
       if (CLOUD && await handleLicenses(req, res, url.pathname)) return;
       if (url.pathname.startsWith("/api/")) {
         if (CLOUD && url.pathname !== "/api/health") {

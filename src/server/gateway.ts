@@ -29,7 +29,7 @@ createServer((req, res) => { void (async () => {
     if (!['127.0.0.1', 'localhost'].some(host => req.headers.host === `${host}:${port}`)) throw new SessionError('Invalid Host', 403);
     if (req.headers.origin && ![`http://127.0.0.1:${port}`, `http://localhost:${port}`].includes(req.headers.origin)) throw new SessionError('Origin not allowed', 403);
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`);
-    if (url.pathname === '/api/health') { send(res, { ok: true, app: 'Homescapes Save Studio' }); return; }
+    if (url.pathname === '/api/health') { send(res, { ok: true, app: 'Homescapes Save Studio', clientVersion: process.env.HC_DESKTOP_VERSION ?? 'development' }); return; }
     if (await handleRemote(req, res, url, bridge)) return;
     if (req.method === 'GET' && url.pathname === '/api/devices') { send(res, await bridge(['adb-info'])); return; }
     const commands: Record<string, string> = { '/api/device/stop': 'force-stop', '/api/device/start': 'start', '/api/device/restore': 'restore-backup' };

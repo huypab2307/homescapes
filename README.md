@@ -1,79 +1,75 @@
-# Homescapes Server — Render Web Service
+# Homescapes Server — phát hành client tự cập nhật
 
-Gói server riêng: engine xử lý save, MAX_GP và các chức năng cũ, xác minh license,
-trang web Admin, quyền Owner cấp key qua EXE. Không cần gói client để deploy.
+Gói này có đầy đủ source UI + API + gateway/bridge để các lần sau chỉ cần sửa
+repository server và deploy lại. Giữ toàn bộ thư mục `src`, `public`, `client`,
+`tools`, `data` và các file cấu hình ở gốc repository.
 
-## Deploy lên Web Service đang có
+## Deploy lần đầu cho auto-update
 
-1. Upload nội dung thư mục này lên repository đang nối Render. `package.json`
-   và `src` phải nằm ở Root Directory mà Render dùng.
-2. Build Command: `npm ci --include=dev --cache /tmp/hcs-npm-cache && npm run build`
-3. Start Command: `npm start`
-4. Health Check Path: `/api/health`
-5. Thiết lập các biến sau rồi Save, rebuild, and deploy:
+Giữ Web Service hiện có và database cũ. Cấu hình:
 
-| Biến | Giá trị |
+| Mục | Giá trị |
 | --- | --- |
+| Build Command | npm ci --include=dev --cache /tmp/hcs-npm-cache && npm run build |
+| Start Command | npm start |
+| Health Check | /api/health |
 | NODE_VERSION | 24.21.0 |
 | HC_CLOUD_MODE | 1 |
-| DATABASE_URL | PostgreSQL connection URL, dùng Internal URL nếu cùng region Render |
-| HC_ADMIN_PASSWORD | Mật khẩu web Admin, ít nhất 12 ký tự |
-| HC_SESSION_SECRET | Chuỗi ngẫu nhiên ít nhất 32 ký tự |
+| DATABASE_URL | PostgreSQL cũ đang dùng |
+| HC_ADMIN_PASSWORD | Mật khẩu web Admin hiện tại |
+| HC_SESSION_SECRET | Secret hiện tại, giữ cố định |
 
-Đây là bản PostgreSQL hiện tại, chưa chuyển sang licenses.json theo app mẫu.
-Giữ nguyên database và secret khi cập nhật. Không cần thêm biến để dùng key
-Owner đã chỉ định: server tự thêm Owner vĩnh viễn một lần bằng mã băm cấu hình
-sẵn, không đặt key dạng rõ trong source. Key cũ và liên kết máy được giữ lại.
+`npm run build` kiểm tra TypeScript, build UI rồi tự tạo gói client trong
+`desktop_release`. Không cần tạo/upload ZIP cập nhật bằng tay. Gói chỉ chứa UI,
+gateway đã bundle và bridge; không chứa engine, dữ liệu save, Owner hash hoặc
+mật khẩu Admin. Gói được server ký bằng Ed25519 khi client xin manifest.
+
+Khóa ký mặc định được suy ra bằng HMAC từ HC_SESSION_SECRET và một nhãn riêng.
+Nếu cần khóa ký riêng, đặt HC_UPDATE_SIGNING_SECRET (ít nhất 32 ký tự) TRƯỚC khi
+build EXE đầu tiên. Không đổi secret dùng để ký sau khi đã phát EXE: khóa công
+khai đã được pin trong EXE sẽ không chấp nhận khóa mới. Không đưa secret vào Git.
+
+Kiểm tra các URL sau khi deploy:
+- `/api/health` → ok true.
+- `/desktop/update-key.json` → algorithm Ed25519 + public_key.
+- `/desktop/manifest.json` → version + sha256 + signature.
+
+Sau đó build EXE AUTO-UPDATE từ gói client riêng và thay EXE cũ một lần.
+
+## Cập nhật về sau — không build lại EXE
+
+1. Sửa UI trong `src/components`, `src/sections`, CSS hoặc `public`.
+2. Sửa gateway trong `src/server/gateway.ts`, `remote.ts`/các module được import.
+3. Sửa bridge ADB trong `client/hc_client.py` nếu cần.
+4. Commit/push mã lên repository server và deploy lại Render.
+5. Người dùng đóng/mở EXE: app tự tải và chạy gói client mới đã ký.
+
+Các thay đổi engine/API ở `src/engine` và server áp dụng trên server ngay sau
+deploy. Không cần phát client mới khi không thay UI/gateway/bridge.
+
+Không đổi signing secret, URL server hoặc database khi cập nhật thông thường.
+Gói có số phát hành tăng theo thời điểm build và client chặn quay về bản cũ hơn.
+Nếu cần phát lại source cũ, hãy build/deploy lại source đó để có bản phát hành
+mới; rollback sang artifact Render cũ có thể bị client từ chối do số phát hành cũ.
+Không ép cập nhật giữa phiên: app chỉ đổi payload ở lần mở tiếp theo.
+
+## Những chức năng hiện có
+
+- Owner key đã cấu hình; Owner cấp/thu hồi/gỡ khóa key trong EXE.
+- `/admin` vẫn quản lý bằng HC_ADMIN_PASSWORD; key thường không có quyền cấp key.
+- Các tab cũ và MAX_GP được giữ. Fresh Start chỉ còn tạo và khôi phục tài khoản.
+  Trước khi xóa đúng SaveGame.db, SaveGame.db.bak, SaveGame.db.buf, ứng dụng
+  sao lưu cả ba file trên máy tính. Khôi phục trả lại đúng bản sao lưu này.
+  Kiểm tra Player ID sau khi game khởi động; game có thể khôi phục từ đám mây.
+- Không xóa database/key khi cập nhật; save session ở RAM nên Connect lại sau deploy.
 
 ## Kiểm tra
 
-- `https://homescapes-save-api.onrender.com/api/health` cần trả `ok: true`.
-- `/admin`: đăng nhập bằng HC_ADMIN_PASSWORD để quản lý key, gỡ khóa Owner.
-- Client gói riêng: build EXE và nhập key Owner để thấy **Cấp key · Owner**.
-- `npm run build`, `npm test`, `npm run test:owner` kiểm tra mã và phân quyền.
+`npm ci`, `npm run build`, `npm test`, `npm run test:owner`.
+Với Python 3 + cryptography: `npm run test:updates` kiểm tra HTTP/signature thật,
+server-only UI update và rollback khi gateway mới không khởi động.
+`node --experimental-strip-types tools/verify_render.mjs PATH_TO_SAVE` kiểm tra
+các luồng game bằng ADB giả. EXE/MEmu thực tế vẫn cần thử trên Windows.
 
-`npm run build` gói server chỉ kiểm tra TypeScript, không build UI desktop.
-UI web Admin có sẵn trong `src/server/admin.html` và `admin.js`.
-Xem `DEPLOY_RENDER.md` để biết chi tiết logic license. Các hướng dẫn build EXE
-trong tài liệu đó áp dụng cho gói client riêng, không phải gói server này.
-
-Save sessions nằm trong RAM; Connect lại sau deploy/restart. Chỉ chạy một
-instance server vì sessions chưa chia sẻ giữa replica. Không đưa secret vào Git.
-
-## Fresh Start — thử khởi tạo tài khoản mới
-
-Mục **Fresh Start** hiện có nút **Sao lưu & thử tạo tài khoản mới** ở đầu trang.
-Đây là luồng riêng với các ô chỉnh level/coins/stars cũ.
-
-1. Deploy server mới, build và mở EXE mới.
-2. Chọn MEmu phụ và bấm Connect để đọc save hiện tại.
-3. Hủy hoặc lưu các chỉnh sửa còn đang chờ.
-4. Mở Fresh Start → Sao lưu & thử tạo tài khoản mới → đọc và xác nhận.
-5. Ứng dụng chọn đúng package Global/VN, dừng game, đọc lại save, giữ một bản
-   sao lưu riêng trên máy tính, nhờ server format JSON (4 dấu cách, CRLF) rồi
-   bỏ đúng dấu `}` đóng object gốc cuối cùng. Với save XOR, giữ nguyên kiểu
-   mã hóa và trailer nguồn. Không thay level, ID hay các giá trị dữ liệu.
-6. Chỉ ghi nếu bản .hcsbak trên máy game cũng sao lưu thành công; sau đó mở game.
-7. Kiểm tra Player ID có đổi không. Đợi game khởi tạo xong rồi bấm Connect lại.
-
-Phương pháp khớp byte với file test đã được chủ dự án báo thành công. Không bảo
-đảm mọi phiên bản sẽ tạo tài khoản mới: game có thể khôi phục bản cũ hoặc không
-mở được. Luồng này là thử nghiệm, không giả lập hay tự cấp Player ID từ tool.
-
-Có nút **Khôi phục save trước đó** dùng bản .hcsbak gần nhất trên thiết bị.
-Ngoài ra, bản gốc được giữ riêng trên máy tính tại:
-`%LOCALAPPDATA%\HomescapesSaveStudio\backups\before-new-account-…db`.
-Đường dẫn cụ thể hiện trong giao diện sau khi ghi thành công hoặc thông báo lỗi.
-Các bản riêng trên máy tính không bị ghi đè bởi Push lần sau. Bản .hcsbak trên
-máy game có thể bị thay bởi lần Push tiếp theo. Khôi phục file cục bộ không bảo
-đảm khôi phục được liên kết hồ sơ trên server sau khi game đã đổi Player ID.
-Nếu thao tác thất bại, game có thể còn đang dừng: mở lại thủ công hoặc khôi phục.
-
-Sau thao tác, phiên cũ bị loại khỏi luồng Push; phải Connect lại trước khi sửa.
-Không xóa database, không đổi key Owner, không đổi secret khi cập nhật bản này.
-Client và server phải cùng bản có endpoint `/api/fresh-start/prepare` và gateway
-`/api/fresh-start/new-account`. Cần build lại EXE để có bridge với kiểm tra backup.
-
-Đã kiểm tra formatter, XOR/trailer, quyền session, sao lưu thất bại không ghi,
-chặn nhầm thiết bị, chặn Push session cũ và ưu tiên Global/VN. Chưa chạy EXE
-hoặc emulator thật trong môi trường build Linux.
+Bootstrap, Node/Python hoặc thư viện native mới chưa có trong EXE không thể thêm
+qua gói này; các thay đổi đó cần EXE mới. Updater không sửa save hoặc backup.
