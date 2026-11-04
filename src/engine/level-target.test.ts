@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CATALOG } from './catalog.ts';
@@ -10,4 +11,12 @@ test('Stats level targets Properties.level and preserves other level fields', ()
  assert.equal(save.number('Properties.level'), 10000);
  assert.equal(save.number('Properties.LID_Lvl'), 42);
  assert.equal(save.number('Incomes.level'), 9);
+});
+
+test('all visible level editors target the same Properties field', () => {
+ for (const name of ['../sections/DashboardSection.tsx', '../sections/CoreSection.tsx', '../sections/StatsSection.tsx', '../components/StudioApp.tsx']) {
+  const source = readFileSync(new URL(name, import.meta.url), 'utf8');
+  assert.ok(source.includes('Properties.level'), name);
+  assert.ok(!source.includes('Properties.LID_Lvl'), name);
+ }
 });

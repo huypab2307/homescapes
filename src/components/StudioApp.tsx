@@ -153,11 +153,9 @@ function Shell() {
   const clientName =
     connected && typeof values["Properties.name"] === "string" ? (values["Properties.name"] as string) : null;
   const clientLevel =
-    connected && typeof values["Properties.LID_Lvl"] === "number"
-      ? (values["Properties.LID_Lvl"] as number)
-      : connected && typeof values["Properties.level"] === "number"
-        ? (values["Properties.level"] as number)
-        : null;
+    connected && typeof values["Properties.level"] === "number"
+      ? (values["Properties.level"] as number)
+      : null;
   const statusText = connected
     ? `${clientName ?? "Client game"}${clientLevel !== null ? ` · lvl ${clientLevel}` : ""}`
     : serial
@@ -174,7 +172,7 @@ function Shell() {
             <div className="am-tb-name">
               <span className="am-accent">Homescapes</span> Tool
             </div>
-            <div className="am-tb-sub" title="Client kiểm tra cập nhật mỗi lần mở app">Game Data Center{clientVersion ? ` · ${clientVersion.slice(0, 8)}` : ""}</div>
+            <div className="am-tb-sub" title="The client checks for updates each time the app opens">Game Data Center{clientVersion ? ` · ${clientVersion.slice(0, 8)}` : ""}</div>
           </div>
 
           <div className="am-winctl" role="group" aria-label="Window controls">

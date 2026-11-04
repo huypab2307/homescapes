@@ -114,7 +114,7 @@ export async function handleLicenses(req: IncomingMessage, res: ServerResponse, 
     const device = l.allowed_devices ? hash(displayDeviceId(b.deviceId)) : hash(b.deviceId);
     if (l.role !== 'owner') {
       if (l.allowed_devices) {
-        if (!JSON.parse(l.allowed_devices).includes(device)) throw new SessionError('Key không được cấp cho Device ID này', 401);
+        if (!JSON.parse(l.allowed_devices).includes(device)) throw new SessionError('This key is not assigned to this Device ID', 401);
       } else {
         await query('UPDATE hc_licenses SET device_hash=$1 WHERE id=$2 AND device_hash IS NULL RETURNING id', [device, l.id]);
       }
@@ -150,8 +150,8 @@ export async function handleLicenses(req: IncomingMessage, res: ServerResponse, 
     if (!Number.isInteger(days) || days < 0 || days > 36500 || typeof b.note !== 'string' || b.note.length > 500) throw new SessionError('days must be 0–36500; note max 500 characters', 400);
     const maxDevices = Number(b.maxDevices ?? 1);
     const ids = Array.isArray(b.deviceIds) ? b.deviceIds : [];
-    if (!Number.isInteger(maxDevices) || maxDevices < 1 || maxDevices > 100 || !ids.length || ids.length > maxDevices || ids.some((id: unknown) => typeof id !== 'string' || !/^VIP-(?:[A-HJ-NP-Z2-9]{4}-){4}[A-HJ-NP-Z2-9]{4}$/.test(id))) throw new SessionError('Nhập Device ID hợp lệ; số ID không vượt quá số máy (1–100)', 400);
-    if (new Set(ids).size !== ids.length) throw new SessionError('Device ID bị trùng', 400);
+    if (!Number.isInteger(maxDevices) || maxDevices < 1 || maxDevices > 100 || !ids.length || ids.length > maxDevices || ids.some((id: unknown) => typeof id !== 'string' || !/^VIP-(?:[A-HJ-NP-Z2-9]{4}-){4}[A-HJ-NP-Z2-9]{4}$/.test(id))) throw new SessionError('Enter valid Device IDs within the maximum device count (1–100)', 400);
+    if (new Set(ids).size !== ids.length) throw new SessionError('Duplicate Device ID', 400);
     const allowed = JSON.stringify(ids.map(hash));
     const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     const text = Array.from(randomBytes(20), b => alphabet[b & 31]).join('');
@@ -164,7 +164,7 @@ export async function handleLicenses(req: IncomingMessage, res: ServerResponse, 
     if (typeof b.id !== 'string') throw new SessionError('License ID required', 400);
     const [target] = await query('SELECT role,allowed_devices FROM hc_licenses WHERE id=$1', [b.id]);
     if (c.role !== 'admin' && target?.role === 'owner') throw new SessionError('Use the web Admin to manage owner keys', 403);
-    if (path.endsWith('unbind') && target?.allowed_devices) throw new SessionError('Key đã cấp theo ID cố định; hãy thu hồi và cấp lại cho ID mới', 400);
+    if (path.endsWith('unbind') && target?.allowed_devices) throw new SessionError('This key has fixed Device IDs. Revoke it and issue a new key to change devices', 400);
     const rows = await query(path.endsWith('revoke') ? 'UPDATE hc_licenses SET revoked=1,version=version+1 WHERE id=$1 RETURNING id' : 'UPDATE hc_licenses SET device_hash=NULL,version=version+1 WHERE id=$1 RETURNING id', [b.id]);
     if (!rows.length) throw new SessionError('Key not found', 404);
     send(res, {}); return true;

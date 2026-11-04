@@ -91,7 +91,7 @@ const STATS: readonly DashStat[] = [
   {
     key: "level",
     label: "Level",
-    path: "Properties.LID_Lvl",
+    path: "Properties.level",
     kind: "int",
     tile: "/gi/Gold_Medal.webp",
     min: 1,

@@ -19,7 +19,7 @@ function Icon({ kind }: { kind: 'device' | 'key' | 'copy' | 'lock' | 'link' | 's
 }
 export function LicenseApp() {
   const [state, setState] = useState<{ loggedIn: boolean; deviceId: string; expiresAt: number }>();
-  const [lang, setLang] = useState<'vi' | 'en'>(() => { try { return localStorage.getItem('hc-login-language') === 'en' ? 'en' : 'vi'; } catch { return 'vi'; } });
+  const [lang, setLang] = useState<'vi' | 'en'>(() => { try { return localStorage.getItem('hc-ui-language-v2') === 'vi' ? 'vi' : 'en'; } catch { return 'en'; } });
   const t = translations[lang];
   const [key, setKey] = useState(''); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
   const [copied, setCopied] = useState(false); const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined); const deviceInput = useRef<HTMLInputElement>(null);
@@ -41,7 +41,7 @@ export function LicenseApp() {
   }
   if (state?.loggedIn) return <StudioApp />;
   return <main className="vip-login" lang={lang}>
-    <div className="vip-language"><Icon kind="globe"/><select aria-label="Language" value={lang} onChange={e => { const next = e.target.value as 'vi' | 'en'; setLang(next); try { localStorage.setItem('hc-login-language', next); } catch {} }}><option value="vi">VI</option><option value="en">EN</option></select></div>
+    <div className="vip-language"><Icon kind="globe"/><select aria-label="Language" value={lang} onChange={e => { const next = e.target.value as 'vi' | 'en'; setLang(next); try { localStorage.setItem('hc-ui-language-v2', next); } catch {} }}><option value="vi">VI</option><option value="en">EN</option></select></div>
     <div className="vip-login-layout">
       <section className="vip-intro" aria-labelledby="vip-brand">
         <div className="vip-accent"/>

@@ -122,10 +122,10 @@ export async function handleRemote(req: IncomingMessage, res: ServerResponse, ur
   if (path === '/api/fresh-start/new-account' || path === '/api/fresh-start/restore') {
     if (req.method !== 'POST') throw new SessionError('Method not allowed', 405);
     const data = JSON.parse((await body(req)).toString());
-    if (typeof data.serial !== 'string' || !data.serial) throw new SessionError('Chọn thiết bị để tiếp tục', 400);
+    if (typeof data.serial !== 'string' || !data.serial) throw new SessionError('Select a device to continue', 400);
     const restoring = path.endsWith('/restore');
     const source = provenance.get(data.sessionId);
-    if (!restoring && (data.confirmation !== 'DELETE_SAVE_FILES' || !source || source.serial !== data.serial)) throw new SessionError('Kết nối lại thiết bị trước khi tiếp tục', 400);
+    if (!restoring && (data.confirmation !== 'DELETE_SAVE_FILES' || !source || source.serial !== data.serial)) throw new SessionError('Reconnect the device before continuing', 400);
     newAccountBusy = true;
     let localBackup = '';
     try {
@@ -140,15 +140,15 @@ export async function handleRemote(req: IncomingMessage, res: ServerResponse, ur
             if (record.serial === data.serial) { localBackup = join(backupDir, name); break; }
           } catch { /* Skip incomplete or unavailable records. */ }
         }
-        if (!localBackup) throw new SessionError('Chưa có bản sao lưu cho thiết bị này', 400);
+        if (!localBackup) throw new SessionError('No backup is available for this device', 400);
       } else {
         await jsonRemote('/api/fresh-start/authorize', { sessionId: data.sessionId, confirmation: data.confirmation });
         const snapshot = await bridge(['fresh-start-snapshot', '--serial', data.serial, '--expect-package', source!.package, '--expect-file', source!.file]);
-        if (!snapshot.ok || snapshot.serial !== data.serial || snapshot.package !== source!.package || snapshot.file !== source!.file || !snapshot.files) throw new SessionError('Không thể chuẩn bị bản sao lưu. Hãy kết nối lại thiết bị.', 400);
+        if (!snapshot.ok || snapshot.serial !== data.serial || snapshot.package !== source!.package || snapshot.file !== source!.file || !snapshot.files) throw new SessionError('Unable to prepare a backup. Reconnect the device.', 400);
         const expected = ['SaveGame.db', 'SaveGame.db.bak', 'SaveGame.db.buf'];
-        if (Object.keys(snapshot.files).length !== 3 || expected.some(name => !(name in snapshot.files))) throw new SessionError('Bản sao lưu chưa đầy đủ', 400);
+        if (Object.keys(snapshot.files).length !== 3 || expected.some(name => !(name in snapshot.files))) throw new SessionError('The backup is incomplete', 400);
         const total = expected.reduce((sum, name) => sum + (typeof snapshot.files[name] === 'string' ? Buffer.from(snapshot.files[name], 'base64').length : 0), 0);
-        if (!snapshot.files['SaveGame.db'] || total < 16 || total > 64 * 1024 * 1024) throw new SessionError('Bản sao lưu không hợp lệ', 400);
+        if (!snapshot.files['SaveGame.db'] || total < 16 || total > 64 * 1024 * 1024) throw new SessionError('The backup is invalid', 400);
         await mkdir(backupDir, { recursive: true });
         localBackup = join(backupDir, `fresh-start-${Date.now()}-${randomUUID()}.json`);
         const pendingBackup = join(backupDir, `.pending-${randomUUID()}.tmp`);
@@ -163,13 +163,13 @@ export async function handleRemote(req: IncomingMessage, res: ServerResponse, ur
       const retired = [...provenance].filter(([, entry]) => entry.serial === data.serial).map(([id]) => id);
       for (const id of retired) provenance.delete(id);
       const result = await bridge([restoring ? 'fresh-start-restore' : 'fresh-start', '--serial', data.serial, '--snapshot', localBackup]);
-      if (!result.ok) throw new SessionError(restoring ? 'Không thể khôi phục tài khoản trước đó' : 'Không thể hoàn tất. Hãy thử khôi phục tài khoản trước đó.', 400);
+      if (!result.ok) throw new SessionError(restoring ? 'Unable to restore the previous account' : 'Unable to complete the operation. Try restoring the previous account.', 400);
       await Promise.allSettled(retired.map(sessionId => jsonRemote('/api/session/close', { sessionId })));
       send(res, { ...result, ok: true, localBackup, needsReconnect: true });
     } catch (error) {
       console.error('Fresh Start:', error instanceof Error ? error.message : String(error));
       if (error instanceof SessionError) throw error;
-      throw new SessionError('Không thể hoàn tất. Hãy kết nối lại thiết bị hoặc khôi phục tài khoản trước đó.', 500);
+      throw new SessionError('Unable to complete the operation. Reconnect the device or restore the previous account.', 500);
     } finally { newAccountBusy = false; }
     return true;
   }

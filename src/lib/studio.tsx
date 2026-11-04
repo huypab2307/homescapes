@@ -260,12 +260,12 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     setPushing(true);
     try {
       const result = await api.newAccount(serial, overview.meta.id);
-      toast.ok('Đã khởi động lại game', 'Đợi game sẵn sàng rồi kết nối lại.');
-      pushLog('ok', 'Fresh Start hoàn tất');
+      toast.ok('Game restarted', 'Wait for the game to be ready, then reconnect.');
+      pushLog('ok', 'Fresh Start completed');
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      toast.err('Không hoàn tất thao tác', message); pushLog('err', 'Fresh Start chưa hoàn tất', message);
+      toast.err('Operation failed', message); pushLog('err', 'Fresh Start failed', message);
       return null;
     } finally {
       api.forgetSession(); setOverview(null); setValues({}); setDeviceSerial(null); setLastApply(null); setPendingMap(new Map()); setPushing(false);
@@ -278,9 +278,9 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       const result = await api.restoreFreshStart(serial);
       if (result.error) throw Error(result.error);
       api.forgetSession(); setOverview(null); setValues({}); setDeviceSerial(null); setPendingMap(new Map());
-      toast.ok('Đã khôi phục tài khoản trước đó', 'Đợi game sẵn sàng rồi kết nối lại.');
-      pushLog('ok', 'Đã khôi phục tài khoản trước đó');
-    } catch (error) { toast.err('Khôi phục thất bại', error instanceof Error ? error.message : String(error)); }
+      toast.ok('Previous account restored', 'Wait for the game to be ready, then reconnect.');
+      pushLog('ok', 'Previous account restored');
+    } catch (error) { toast.err('Restore failed', error instanceof Error ? error.message : String(error)); }
     finally { setPushing(false); }
   }, [serial, applying, connecting, pushing, toast, pushLog]);
 
