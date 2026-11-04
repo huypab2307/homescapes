@@ -40,7 +40,6 @@ export const FRAME_ITEMS: readonly CosmeticItem[] = [
   { id: "dragon_nest_frame_1", label: "Dragon Nest I", icon: "assets/cosmetics/frames/dragon_nest_frame_1.webp" },
   { id: "dragon_nest_frame_2", label: "Dragon Nest II", icon: "assets/cosmetics/frames/dragon_nest_frame_2.webp" },
   { id: "dragon_nest_frame_duck", label: "Duckling", icon: "assets/cosmetics/frames/dragon_nest_frame_duck.webp" },
-  { id: "dragon_nest_frame_fire", label: "Fire", mono: "—" },
   { id: "dragon_nest_frame_summer", label: "Summer", icon: "assets/cosmetics/frames/dragon_nest_frame_summer.webp" },
   { id: "dragon_nest_frame_magnet", label: "Magnet", icon: "assets/cosmetics/frames/dragon_nest_frame_magnet.webp" },
   { id: "dragon_nest_frame_lava", label: "Lava", icon: "assets/cosmetics/frames/dragon_nest_frame_lava.webp" },

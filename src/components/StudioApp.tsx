@@ -1,3 +1,4 @@
+import { ServerSettings } from "./ServerSettings.tsx";
 import { useEffect, useState, type CSSProperties } from "react";
 import { StudioProvider, useStudio, type SectionId } from "../lib/studio.tsx";
 import { ToastProvider, AmEmpty } from "./ui.tsx";
@@ -175,6 +176,7 @@ function Shell() {
           </div>
 
           <div className="am-tb-right am-tb-right--tools">
+            <ServerSettings />
             <select
               className="am-select am-select--device"
               value={serial ?? ""}
