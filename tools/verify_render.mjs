@@ -1,3 +1,4 @@
+import { displayDeviceId } from '../src/server/deviceId.ts';
 /** Integration test, no Render account or real ADB required.
  * node --experimental-strip-types tools/verify_render.mjs PATH_TO_SAVE
  */
@@ -39,7 +40,7 @@ try{
  assert.equal((await request(cloud,'/api/admin/login',{password:'bad'})).status,401);
  let admin=(await request(cloud,'/api/admin/login',{password})).result.accessToken;
  const adminHeaders=()=>({authorization:'Bearer '+admin});
- const create=async(days=7)=>{const r=await request(cloud,'/api/admin/create',{days,note:'test <script> & unicode tiếng Việt'},adminHeaders());assert.equal(r.status,200,JSON.stringify(r.result));return r.result;};
+ const create=async(days=7)=>{const r=await request(cloud,'/api/admin/create',{days,note:'test <script> & unicode tiếng Việt',maxDevices:3,deviceIds:['test-client-device-0001','second-independent-client-01','desktop-machine-id-0001'].map(displayDeviceId)},adminHeaders());assert.equal(r.status,200,JSON.stringify(r.result));return r.result;};
  const login=async(key,deviceId='test-client-device-0001')=>request(cloud,'/api/auth/login',{key,deviceId});
  const license=await create(); const key=license.key;
  assert.match(key,/^VIP-(?:[A-HJ-NP-Z2-9]{4}-){4}[A-HJ-NP-Z2-9]{4}$/);
@@ -68,7 +69,7 @@ try{
  writeFileSync(join(deviceDir,'keep-other-file'),'keep');
  writeFileSync(fake,`#!/usr/bin/env python3\nimport sys,json,base64,pathlib\na=sys.argv[1:]\nroot=pathlib.Path(${JSON.stringify(deviceDir)})\nnames=['SaveGame.db','SaveGame.db.bak','SaveGame.db.buf']\nwith pathlib.Path(${JSON.stringify(bridgeLog)}).open('a') as log: log.write(json.dumps(a)+'\\n')\nif a[0]=='pull':\n print(json.dumps({'ok':True,'b64':base64.b64encode(pathlib.Path(${JSON.stringify(fixture)}).read_bytes()).decode(),'file':'/data/data/com.playrix.homescapes/files/SaveGame.db','package':'com.playrix.homescapes'}))\nelif a[0]=='push':\n pathlib.Path(${JSON.stringify(pushed)}).write_bytes(pathlib.Path(a[a.index('--in')+1]).read_bytes())\n print(json.dumps({'ok':True,'relaunched':True,'package':'com.playrix.homescapes','toolBackup':'/data/data/com.playrix.homescapes/files/SaveGame.db.hcsbak'}))\nelif a[0]=='fresh-start-snapshot':\n print(json.dumps({'ok':True,'schema':1,'serial':a[a.index('--serial')+1],'package':a[a.index('--expect-package')+1],'file':a[a.index('--expect-file')+1],'files':{n:base64.b64encode((root/n).read_bytes()).decode() if (root/n).exists() else None for n in names}}))\nelif a[0] in ['fresh-start','fresh-start-restore']:\n state=json.loads(pathlib.Path(a[a.index('--snapshot')+1]).read_text())\n for n in names:\n  if a[0]=='fresh-start' or state['files'][n] is None: (root/n).unlink(missing_ok=True)\n  else: (root/n).write_bytes(base64.b64decode(state['files'][n]))\n print(json.dumps({'ok':True,'relaunched':True}))\nelse:print(json.dumps({'ok':True,'info':{'found':True,'devices':[]}}))\n`);
  chmodSync(fake,0o755);
- const desktop=await start({HC_CLOUD_MODE:'0',HC_ALLOW_HTTP_REMOTE:'1',HC_REMOTE_URL:cloud,HC_DEVICE_ID:'desktop-machine-id-0001',HC_BRIDGE_EXE:fake,HC_BACKUP_DIR:join(temp,'backups')}, 'src/server/gateway.ts');
+ const desktop=await start({HC_CLOUD_MODE:'0',HC_ALLOW_HTTP_REMOTE:'1',HC_REMOTE_URL:cloud,HC_DEVICE_ID:'desktop-machine-id-0001',HC_AUTH_DIR:temp,HC_BRIDGE_EXE:fake,HC_BACKUP_DIR:join(temp,'backups')}, 'src/server/gateway.ts');
  assert.equal((await request(desktop,'/api/sessions')).status,401);
  assert.equal((await request(desktop,'/api/local/auth',{key:'wrong'})).status,401);
  const desktopLicense=await create(30);
@@ -108,7 +109,7 @@ try{
  assert.equal((await request(cloud,'/api/fresh-start/authorize',{sessionId:experimentId,confirmation:'DELETE_SAVE_FILES'},headers)).status,404);
  // A local backup failure must prevent the push entirely.
  const blockedDir=join(temp,'backup-file');writeFileSync(blockedDir,'not a directory');
- const blocked=await start({HC_ALLOW_HTTP_REMOTE:'1',HC_REMOTE_URL:cloud,HC_DEVICE_ID:'desktop-machine-id-0001',HC_BRIDGE_EXE:fake,HC_BACKUP_DIR:join(blockedDir,'child')},'src/server/gateway.ts');
+ const blocked=await start({HC_ALLOW_HTTP_REMOTE:'1',HC_REMOTE_URL:cloud,HC_DEVICE_ID:'desktop-machine-id-0001',HC_AUTH_DIR:temp,HC_BRIDGE_EXE:fake,HC_BACKUP_DIR:join(blockedDir,'child')},'src/server/gateway.ts');
  assert.equal((await request(blocked,'/api/local/auth',{key:desktopLicense.key})).status,200);
  const blockedLoad=await request(blocked,'/api/device/pull',{serial:'local-device'});
  const pushedBefore=readFileSync(pushed);
@@ -133,7 +134,8 @@ try{
  assert.equal((await request(desktop,'/api/sessions')).status,401);
  assert.equal((await request(desktop,'/api/local/auth')).result.loggedIn,false);
  assert.equal((await request(desktop,'/api/local/auth',{key:desktopLicense.key})).status,401);
- assert.equal((await request(cloud,'/api/admin/unbind',{id:license.id},adminHeaders())).status,200);
+ assert.equal((await request(cloud,'/api/admin/unbind',{id:license.id},adminHeaders())).status,400);
+ const {DatabaseSync: EditDB}=await import('node:sqlite');const editDb=new EditDB(dbFile);editDb.prepare('UPDATE hc_licenses SET allowed_devices=NULL,device_hash=NULL,version=version+1 WHERE id=?').run(license.id);editDb.close();
  assert.equal((await request(cloud,'/api/sessions',undefined,headers)).status,401);
  assert.equal((await login(key,'test-client-device-0002')).status,200);
  // Expiry is checked against the DB for every request, including existing tokens.

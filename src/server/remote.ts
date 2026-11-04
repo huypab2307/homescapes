@@ -1,6 +1,7 @@
 /** Desktop gateway: ADB/UI stay local; save processing is forwarded over HTTPS. */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { displayDeviceId } from "./deviceId.ts";
+import { rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { writeFile, readFile, readdir, open, rename, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -10,14 +11,25 @@ import { SessionError } from "./errors.ts";
 interface Config { url: string; apiKey: string; clientId: string }
 let config: Config = { url: process.env.HC_REMOTE_URL ?? "https://homescapes-save-api.onrender.com", apiKey: "", clientId: process.env.HC_DEVICE_ID ?? randomUUID() };
 let licenseKey = "";
+let rememberToken = "";
+const authFile = join(process.env.HC_AUTH_DIR ?? process.env.LOCALAPPDATA ?? join(homedir(), ".local", "share"), "HomescapesSaveStudio", "login.json");
 let tokenUntil = 0;
 let expiresAt = 0;
 let isOwner = false;
 let newAccountBusy = false;
 let refreshPending: Promise<void> | undefined;
 const provenance = new Map<string, { serial: string; package: string; file: string }>();
-const initialize = async () => {};
-function clearAuth() { licenseKey = ''; config.apiKey = ''; isOwner = false; tokenUntil = 0; expiresAt = 0; provenance.clear(); }
+let initialized: Promise<void> | undefined;
+const initialize = () => initialized ??= (async () => {
+  try { const saved = JSON.parse(await readFile(authFile, 'utf8')); if (saved.url === config.url && saved.deviceId === config.clientId && typeof saved.token === 'string') rememberToken = saved.token; } catch {}
+})();
+async function saveLogin() {
+  await mkdir(join(authFile, '..'), { recursive: true });
+  const temp = authFile + '.' + randomUUID() + '.tmp';
+  try { await writeFile(temp, JSON.stringify({ url: config.url, deviceId: config.clientId, token: rememberToken }), { mode: 0o600 }); await rename(temp, authFile); }
+  finally { await rm(temp, { force: true }); }
+}
+function clearAuth() { licenseKey = ''; rememberToken = ''; try { rmSync(authFile, { force: true }); } catch {} config.apiKey = ''; isOwner = false; tokenUntil = 0; expiresAt = 0; provenance.clear(); }
 async function activate(key: string) {
   const response = await fetch(endpoint(config.url) + '/api/auth/login', {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -25,12 +37,19 @@ async function activate(key: string) {
   });
   const data = await response.json() as any;
   if (!response.ok) throw new SessionError(data.error ?? 'Login failed', response.status);
+  if (data.rememberToken) rememberToken = data.rememberToken;
+  config.apiKey = data.accessToken; tokenUntil = Date.now() + data.tokenSeconds * 1000; expiresAt = data.expiresAt; isOwner = data.isOwner === true;
+}
+async function refreshLogin() {
+  const response = await fetch(endpoint(config.url) + '/api/auth/refresh', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + rememberToken }, body: JSON.stringify({ deviceId: config.clientId }), redirect: 'error', signal: AbortSignal.timeout(120000) });
+  const data = await response.json() as any;
+  if (!response.ok) { if (response.status === 401) clearAuth(); throw new SessionError(data.error ?? 'Login failed', response.status); }
   config.apiKey = data.accessToken; tokenUntil = Date.now() + data.tokenSeconds * 1000; expiresAt = data.expiresAt; isOwner = data.isOwner === true;
 }
 async function ensureToken() {
-  if (!licenseKey) throw new SessionError('Please log in with your license key', 401);
+  if (!licenseKey && !rememberToken) throw new SessionError('Please log in with your license key', 401);
   if (Date.now() < tokenUntil - 60000) return;
-  await (refreshPending ??= activate(licenseKey).catch(error => { clearAuth(); throw error; }).finally(() => { refreshPending = undefined; }));
+  await (refreshPending ??= (rememberToken ? refreshLogin() : activate(licenseKey)).catch(error => { if (error instanceof SessionError && error.status === 401) clearAuth(); throw error; }).finally(() => { refreshPending = undefined; }));
 }
 async function body(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = []; let size = 0;
@@ -83,15 +102,16 @@ export async function handleRemote(req: IncomingMessage, res: ServerResponse, ur
       if (data.logout) { clearAuth(); }
       else {
         if (typeof data.key !== 'string' || data.key.length > 256) throw new SessionError('Invalid license key', 400);
-        await activate(data.key.trim()); licenseKey = data.key.trim(); provenance.clear();
+        await activate(data.key.trim()); licenseKey = data.key.trim(); provenance.clear(); await saveLogin();
       }
     } else if (req.method !== 'GET') throw new SessionError('Method not allowed', 405);
-    send(res, { ok: true, loggedIn: !!licenseKey && !!config.apiKey, deviceId: displayDeviceId(config.clientId), url: config.url, expiresAt, isOwner: !!licenseKey && !!config.apiKey && isOwner });
+    if (rememberToken && !config.apiKey) { try { await ensureToken(); } catch {} }
+    send(res, { ok: true, loggedIn: !!(licenseKey || rememberToken) && !!config.apiKey, deviceId: displayDeviceId(config.clientId), url: config.url, expiresAt, isOwner: !!(licenseKey || rememberToken) && !!config.apiKey && isOwner });
     return true;
   }
   if (url.pathname === '/api/remote/config') {
     if (req.method !== 'GET') throw new SessionError('Server URL is configured by the release owner. Use license login.', 403);
-    send(res, { ok: true, url: config.url, hasApiKey: !!licenseKey, mode: 'remote' }); return true;
+    send(res, { ok: true, url: config.url, hasApiKey: !!(licenseKey || rememberToken), mode: 'remote' }); return true;
   }
   if (!config.url || !url.pathname.startsWith("/api/") || url.pathname === "/api/health") return false;
   const path = url.pathname;

@@ -7,6 +7,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
+import { displayDeviceId } from '../src/server/deviceId.ts';
 import { DatabaseSync } from 'node:sqlite';
 const root = resolve(import.meta.dirname, '..');
 const folder = mkdtempSync(join(tmpdir(), 'hcs-owner-'));
@@ -39,23 +40,36 @@ try {
   const old = await login(oldKey, 'legacy-machine-00001'); assert.equal(old.status, 200); assert.equal(old.data.isOwner, false);
   const owner = await login(ownerKey); assert.equal(owner.status, 200); assert.equal(owner.data.isOwner, true); assert.equal(owner.data.expiresAt, 0);
   const ownerId = db.prepare("SELECT id FROM hc_licenses WHERE role='owner'").get().id;
-  assert.equal((await login(ownerKey, 'other-owner-machine-001')).status, 401);
-  const desktop = await start('src/server/gateway.ts', { HC_REMOTE_URL: cloud.url, HC_ALLOW_HTTP_REMOTE: '1', HC_DEVICE_ID: 'test-owner-machine-0001' });
+  assert.equal((await login(ownerKey, 'other-owner-machine-001')).status, 200);
+  const desktop = await start('src/server/gateway.ts', { HC_REMOTE_URL: cloud.url, HC_ALLOW_HTTP_REMOTE: '1', HC_DEVICE_ID: 'test-owner-machine-0001', HC_AUTH_DIR: folder });
   const desktopLogin = await api(desktop.url, '/api/local/auth', { key: ownerKey, isOwner: false });
   assert.equal(desktopLogin.data.isOwner, true); assert.equal(desktopLogin.data.loggedIn, true);
   const listed = await api(desktop.url, '/api/admin/licenses'); assert.equal(listed.status, 200); assert.equal(listed.data.licenses.length, 2);
   assert.ok(!JSON.stringify(listed.data).includes(ownerKey)); assert.ok(!JSON.stringify(listed.data).includes('key_hash'));
-  const issued = await api(desktop.url, '/api/admin/create', { days: 7, note: 'issued from EXE', role: 'owner', isOwner: true });
+  const issued = await api(desktop.url, '/api/admin/create', { days: 7, maxDevices: 2, deviceIds: [displayDeviceId('issued-user-machine-01'), displayDeviceId('issued-user-machine-02')], note: 'issued from EXE', role: 'owner', isOwner: true });
   assert.equal(issued.status, 200); assert.match(issued.data.key, /^VIP-(?:[A-HJ-NP-Z2-9]{4}-){4}[A-HJ-NP-Z2-9]{4}$/);
   assert.equal(db.prepare('SELECT role FROM hc_licenses WHERE id=?').get(issued.data.id).role, 'user');
   const user = await login(issued.data.key, 'issued-user-machine-01'); assert.equal(user.status, 200); assert.equal(user.data.isOwner, false);
+  assert.equal((await login(issued.data.key, 'issued-user-machine-02')).status, 200);
+  assert.equal((await login(issued.data.key, 'issued-user-machine-03')).status, 401);
+  assert.equal((await api(cloud.url, '/api/auth/refresh', { deviceId: 'issued-user-machine-01' }, user.data.rememberToken)).status, 200);
+  assert.equal((await api(cloud.url, '/api/auth/refresh', { deviceId: 'issued-user-machine-02' }, user.data.rememberToken)).status, 401);
+  assert.equal((await api(cloud.url, '/api/sessions', undefined, user.data.rememberToken)).status, 401);
+  for (const invalid of [{ maxDevices: 1, deviceIds: [] }, { maxDevices: 1, deviceIds: [displayDeviceId('a'), displayDeviceId('b')] }, { maxDevices: 2, deviceIds: [displayDeviceId('a'), displayDeviceId('a')] }, { maxDevices: 0, deviceIds: [displayDeviceId('a')] }]) {
+    assert.equal((await api(cloud.url, '/api/admin/create', { days: 7, note: '', ...invalid }, owner.data.accessToken)).status, 400);
+  }
+  desktop.child.kill(); await once(desktop.child, 'exit');
+  const remembered = await start('src/server/gateway.ts', { HC_REMOTE_URL: cloud.url, HC_ALLOW_HTTP_REMOTE: '1', HC_DEVICE_ID: 'test-owner-machine-0001', HC_AUTH_DIR: folder });
+  const restoredLogin = await api(remembered.url, '/api/local/auth');
+  assert.equal(restoredLogin.data.loggedIn, true); assert.equal(restoredLogin.data.isOwner, true);
+  desktop.url = remembered.url;
   for (const [path, body] of [['licenses', undefined], ['create', { days: 0, note: '', role: 'owner', isOwner: true }], ['revoke', { id: 'legacy' }], ['unbind', { id: 'legacy' }]]) {
     assert.equal((await api(cloud.url, '/api/admin/' + path, body, user.data.accessToken)).status, 403);
   }
   // Ordinary keys cannot spoof owner status by supplying an isOwner field to the gateway.
   await api(desktop.url, '/api/local/auth', { logout: true });
   assert.equal((await api(desktop.url, '/api/admin/create', { days: 7, note: '' })).status, 401);
-  const gatewayUser = await api(cloud.url, '/api/admin/create', { days: 7, note: 'normal gateway user' }, owner.data.accessToken);
+  const gatewayUser = await api(cloud.url, '/api/admin/create', { days: 7, maxDevices: 1, deviceIds: [displayDeviceId('test-owner-machine-0001')], note: 'normal gateway user' }, owner.data.accessToken);
   const spoof = await api(desktop.url, '/api/local/auth', { key: gatewayUser.data.key, isOwner: true });
   assert.equal(spoof.status, 200); assert.equal(spoof.data.isOwner, false);
   assert.equal((await api(desktop.url, '/api/admin/create', { days: 7, note: '', isOwner: true })).status, 403);
@@ -64,14 +78,15 @@ try {
   const another = await api(desktop.url, '/api/local/auth', { key: oldKey, isOwner: true });
   assert.equal(another.status, 401); // already bound to another machine
   // Let the first owner session manage a normal user's binding and revoke it.
-  assert.equal((await api(cloud.url, '/api/admin/unbind', { id: issued.data.id }, owner.data.accessToken)).status, 200);
-  assert.equal((await api(cloud.url, '/api/sessions', undefined, user.data.accessToken)).status, 401);
+  assert.equal((await api(cloud.url, '/api/admin/unbind', { id: issued.data.id }, owner.data.accessToken)).status, 400);
+  assert.equal((await api(cloud.url, '/api/admin/unbind', { id: 'legacy' }, owner.data.accessToken)).status, 200);
+  assert.equal((await api(cloud.url, '/api/sessions', undefined, old.data.accessToken)).status, 401);
   assert.equal((await api(cloud.url, '/api/admin/revoke', { id: issued.data.id }, owner.data.accessToken)).status, 200);
   assert.equal((await login(issued.data.key, 'issued-user-machine-01')).status, 401);
   assert.equal((await api(cloud.url, '/api/admin/unbind', { id: ownerId }, owner.data.accessToken)).status, 403);
   // Demotion, expiration and revocation are verified in the database for every management call.
   db.prepare("UPDATE hc_licenses SET role='user' WHERE id=?").run(ownerId);
-  assert.equal((await api(cloud.url, '/api/admin/create', { days: 7, note: '' }, owner.data.accessToken)).status, 403);
+  assert.equal((await api(cloud.url, '/api/admin/create', { days: 7, note: '' }, owner.data.accessToken)).status, 401);
   db.prepare("UPDATE hc_licenses SET role='owner',expires_at=1 WHERE id=?").run(ownerId);
   assert.equal((await api(cloud.url, '/api/admin/create', { days: 7, note: '' }, owner.data.accessToken)).status, 401);
   db.prepare('UPDATE hc_licenses SET expires_at=0 WHERE id=?').run(ownerId);
@@ -83,7 +98,7 @@ try {
   assert.equal(db.prepare("SELECT count(*) AS n FROM hc_licenses WHERE role='owner'").get().n, 1);
   assert.equal(db.prepare('SELECT role FROM hc_licenses WHERE id=?').get('legacy').role, 'user');
   assert.ok(!JSON.stringify(db.prepare('SELECT * FROM hc_licenses').all()).includes(ownerKey)); db.close();
-  console.log('PASS: old-schema migration; owner bootstrap/binding; EXE issuance; all generated keys remain regular users; non-owner API denial; owner revoke/unbind; demotion/expiry/revoke immediately enforced; no owner resurrection on restart.');
+  console.log('PASS: old-schema migration; multi-device owner; preassigned device limits; persistent login restart and refresh token isolation; EXE issuance; all generated keys remain regular users; non-owner API denial; owner revoke/unbind; demotion/expiry/revoke immediately enforced; no owner resurrection on restart.');
 } finally {
   for (const child of processes) child.kill();
   await Promise.all(processes.map(child => child.exitCode === null && child.signalCode === null ? once(child, 'exit') : Promise.resolve()));

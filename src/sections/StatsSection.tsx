@@ -58,6 +58,7 @@ interface StatGroup {
 }
 
 const GROUPS: StatGroup[] = [
+  { title: "Level", fields: [{ path: "Properties.level", label: "Level", min: 1, max: 100000 }] },
   {
     title: "Boosters",
     fields: [

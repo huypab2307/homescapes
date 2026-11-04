@@ -73,3 +73,7 @@ các luồng game bằng ADB giả. EXE/MEmu thực tế vẫn cần thử trên
 
 Bootstrap, Node/Python hoặc thư viện native mới chưa có trong EXE không thể thêm
 qua gói này; các thay đổi đó cần EXE mới. Updater không sửa save hoặc backup.
+
+## Cập nhật cấp key và đăng nhập
+
+Owner dùng trên nhiều máy. Key mới phải nhập Device ID và số máy tối đa khi cấp; key cũ giữ khóa máy hiện tại. Phiên đăng nhập tự ghi nhớ 30 ngày, đăng xuất xóa phiên đã lưu. Stats chỉnh Properties.level. Xem TEST_VI.md để thử từng trường hợp. Giữ nguyên DATABASE_URL và HC_SESSION_SECRET khi deploy; database tự thêm cột mới.

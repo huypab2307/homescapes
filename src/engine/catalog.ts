@@ -50,21 +50,12 @@ export const CATALOG: readonly CatalogGroup[] = [
         warning: "Mirrored into Properties.CeReas_R1 as `C=`.",
       },
       {
-        path: "Properties.LID_Lvl",
+        path: "Properties.level",
         label: "Level",
-        hint:
-          "Match-3 (minigame) level stored in the local save. The profile " +
-          "level the client displays and the leaderboard report is tracked " +
-          "server-side by Playrix, so a save edit alone does not change it " +
-          "(verified live: LID_Lvl=32 kept after the game re-saved while the " +
-          "client and leaderboard still reported level 1).",
+        hint: "Level",
         control: "int",
         min: 1,
         max: 100000,
-        warning:
-          "Server-authoritative for display: expect the game to keep showing " +
-          "its server-computed level after this write. Large jumps also make " +
-          "later orders impossible to complete.",
       },
       {
         path: "Properties.earnedStars",

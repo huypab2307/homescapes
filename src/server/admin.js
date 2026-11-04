@@ -19,6 +19,6 @@ async function refresh() {
   }
 }
 el('loginForm').onsubmit = e => { e.preventDefault(); void run(async () => { const d = await api('login', { password: el('password').value }); el('password').value = ''; token = d.accessToken; el('panel').hidden = false; el('login').hidden = true; await refresh(); }); };
-el('createForm').onsubmit = e => { e.preventDefault(); void run(async () => { const d = await api('create', { days: Number(el('days').value), note: el('note').value }); generated = d.key; el('newkey').textContent = d.key + '\nLưu key ngay: server chỉ lưu mã băm, không thể xem lại toàn bộ key.'; el('copy').hidden = false; await refresh(); }); };
+el('createForm').onsubmit = e => { e.preventDefault(); void run(async () => { const d = await api('create', { days: Number(el('days').value), note: el('note').value, maxDevices: Number(el('maxDevices').value), deviceIds: el('deviceIds').value.trim().toUpperCase().split(/[\s,;]+/).filter(Boolean) }); generated = d.key; el('newkey').textContent = d.key + '\nLưu key ngay: server chỉ lưu mã băm, không thể xem lại toàn bộ key.'; el('copy').hidden = false; await refresh(); }); };
 el('copy').onclick = () => void run(async () => navigator.clipboard.writeText(generated));
 el('refresh').onclick = () => void run(refresh); el('logout').onclick = logout;

@@ -332,8 +332,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         const [n, l] = await Promise.all([
           api.field("Properties.name").catch(() => null),
           api
-            .field("Properties.LID_Lvl")
-            .catch(() => api.field("Properties.level"))
+            .field("Properties.level")
             .catch(() => null),
         ]);
         const nm = typeof n?.value === "string" && n.value ? n.value : "";
